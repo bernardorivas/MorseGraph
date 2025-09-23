@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hybrid-dynamics"
+version = "0.1.0"
+description = "A Python library for hybrid dynamical systems analysis"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "bernardorivas", email = "bernardo.apr@gmail.com"}
+]
+keywords = [
+    "hybrid systems",
+    "dynamical systems", 
+    "differential equations",
+    "event detection",
+    "trajectory analysis",
+    "scientific computing",
+    "mathematics",
+    "simulation"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Physics",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.20.0",
+    "scipy>=1.7.0",
+    "matplotlib>=3.3.0",
+    "networkx>=2.5.0",
+    "dill>=0.3.4",
+]
+
+[project.optional-dependencies]
+all = [
+    "numba>=0.56.0",      # JIT compilation for performance
+    "joblib>=1.0.0",      # Parallel processing
+    "pygraphviz>=1.7",    # Morse graph visualization
+]
+
+[project.urls]
+Homepage = "https://github.com/bernardorivas/hybrid-dynamics"
+Repository = "https://github.com/bernardorivas/hybrid-dynamics"
+Documentation = "https://hybrid-dynamics.readthedocs.io/"
+"Bug Reports" = "https://github.com/bernardorivas/hybrid-dynamics/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hybrid_dynamics*"]
+exclude = ["tests*"]
