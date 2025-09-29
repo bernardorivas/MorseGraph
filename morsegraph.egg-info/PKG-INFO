@@ -1,0 +1,32 @@
+Metadata-Version: 2.4
+Name: morsegraph
+Version: 0.1.0
+Summary: A lightweight library for Morse graph analysis of dynamical systems.
+Author: Bernardo Rivas
+Author-email: bernardo.dopradorivas@utoledo.edu
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: networkx
+Requires-Dist: matplotlib
+Provides-Extra: ml
+Requires-Dist: torch; extra == "ml"
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+# MorseGraph
+
+A lightweight, modern, and extensible Python library for computing and analyzing Morse graphs of dynamical systems.
+
+(More details to be added)

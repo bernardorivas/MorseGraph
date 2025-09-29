@@ -1,0 +1,13 @@
+# Core dependencies
+numpy
+scipy
+networkx
+matplotlib
+
+# Optional dependency for morse_graph.plot.plot_morse_graph
+pygraphviz
+
+# Optional dependencies for machine learning features
+# Install with: pip install -r requirements.txt -r requirements-ml.txt
+# Or via pip install morsegraph[ml]
+torch
