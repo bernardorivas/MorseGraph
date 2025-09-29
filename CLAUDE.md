@@ -48,7 +48,7 @@ The library follows a modular design with clear separation of concerns:
 
 3. **`core.py`** - Main computation engine
    - `Model`: Connects dynamics and grids
-   - `compute_map_graph()`: Parallel computation of box-to-box transitions using joblib
+   - `compute_box_map()`: Parallel computation of BoxMap (box-to-box transitions) using joblib
 
 4. **`analysis.py`** - Graph analysis and Morse decomposition
    - `compute_morse_graph()`: NetworkX-based strongly connected components analysis

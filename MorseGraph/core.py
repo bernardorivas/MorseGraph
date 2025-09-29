@@ -19,19 +19,19 @@ class Model:
         self.grid = grid
         self.dynamics = dynamics
 
-    def compute_map_graph(self, n_jobs: int = -1) -> nx.DiGraph:
+    def compute_box_map(self, n_jobs: int = -1) -> nx.DiGraph:
         """
-        Compute the map graph, which represents the transitions between grid boxes.
+        Compute the BoxMap, which represents the discrete dynamical system on grid boxes.
 
         This method iterates over all boxes in the grid, computes the image of
         each box under the dynamics, and finds which other grid boxes intersect
-        with this image. An edge is created in the graph from the source box
-        to each of the intersecting boxes.
+        with this image. The result is a directed graph representing the BoxMap
+        where edges indicate possible transitions between boxes.
 
         :param n_jobs: The number of jobs to run in parallel. -1 means using all
                        available CPUs.
-        :return: A directed graph where nodes are box indices and edges
-                 represent transitions.
+        :return: A directed graph representing the BoxMap, where nodes are box 
+                 indices and edges represent possible transitions.
         """
         boxes = self.grid.get_boxes()
         num_boxes = len(boxes)

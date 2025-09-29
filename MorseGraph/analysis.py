@@ -1,19 +1,19 @@
 import networkx as nx
 from typing import List, Set, Dict, FrozenSet
 
-def compute_morse_graph(map_graph: nx.DiGraph) -> nx.DiGraph:
+def compute_morse_graph(box_map: nx.DiGraph) -> nx.DiGraph:
     """
-    Compute the Morse graph from a map graph, including only non-trivial Morse sets.
+    Compute the Morse graph from a BoxMap, including only non-trivial Morse sets.
 
     A non-trivial Morse set is one that either:
     1. Contains more than one node (multi-node SCC)
     2. Contains a single node with a self-loop
 
-    :param map_graph: The map graph, where nodes are box indices.
+    :param box_map: The BoxMap (directed graph), where nodes are box indices.
     :return: A directed graph where each node is a non-trivial Morse set, 
              represented by a frozenset of the box indices it contains.
     """
-    sccs = list(nx.strongly_connected_components(map_graph))
+    sccs = list(nx.strongly_connected_components(box_map))
     
     # Filter to non-trivial SCCs only
     non_trivial_sccs = []
@@ -24,7 +24,7 @@ def compute_morse_graph(map_graph: nx.DiGraph) -> nx.DiGraph:
         elif len(scc) == 1:
             # Single-node SCC is non-trivial only if it has a self-loop
             node = next(iter(scc))
-            if map_graph.has_edge(node, node):
+            if box_map.has_edge(node, node):
                 non_trivial_sccs.append(scc)
     
     if not non_trivial_sccs:
@@ -45,7 +45,7 @@ def compute_morse_graph(map_graph: nx.DiGraph) -> nx.DiGraph:
             node_to_scc[node] = scc_frozenset
     
     # Add edges between non-trivial SCCs
-    for u, v in map_graph.edges():
+    for u, v in box_map.edges():
         scc_u = node_to_scc.get(u)
         scc_v = node_to_scc.get(v)
         
@@ -55,17 +55,17 @@ def compute_morse_graph(map_graph: nx.DiGraph) -> nx.DiGraph:
 
     return morse_graph
 
-def compute_basins_of_attraction(morse_graph: nx.DiGraph, map_graph: nx.DiGraph) -> Dict[FrozenSet[int], Set[int]]:
+def compute_basins_of_attraction(morse_graph: nx.DiGraph, box_map: nx.DiGraph) -> Dict[FrozenSet[int], Set[int]]:
     """
     Computes the basin of attraction for each attractor in the Morse graph.
 
     :param morse_graph: The Morse graph.
-    :param map_graph: The original map graph.
+    :param box_map: The original BoxMap.
     :return: A dictionary mapping each attractor (a frozenset of box indices) to its basin of attraction (a set of box indices).
     """
     attractors = {node for node in morse_graph.nodes() if morse_graph.out_degree(node) == 0}
     
-    reversed_map_graph = map_graph.reverse()
+    reversed_box_map = box_map.reverse()
     
     basins = {}
     for attractor in attractors:
@@ -76,7 +76,7 @@ def compute_basins_of_attraction(morse_graph: nx.DiGraph, map_graph: nx.DiGraph)
         
         while queue:
             node = queue.pop(0)
-            for predecessor in reversed_map_graph.successors(node):
+            for predecessor in reversed_box_map.successors(node):
                 if predecessor not in visited:
                     visited.add(predecessor)
                     basin.add(predecessor)
@@ -109,11 +109,11 @@ def iterative_morse_computation(model, max_depth: int = 5, refinement_threshold:
     for iteration in range(max_depth):
         print(f"Refinement iteration {iteration + 1}/{max_depth}")
         
-        # Step 1: Compute map graph for current grid
-        map_graph = model.compute_map_graph()
+        # Step 1: Compute BoxMap for current grid
+        box_map = model.compute_box_map()
         
         # Step 2: Compute Morse graph
-        morse_graph = compute_morse_graph(map_graph)
+        morse_graph = compute_morse_graph(box_map)
         
         # Step 3: Identify recurrent boxes (those in non-trivial Morse sets)
         recurrent_indices = _identify_recurrent_boxes(morse_graph, refinement_threshold)
@@ -145,12 +145,12 @@ def iterative_morse_computation(model, max_depth: int = 5, refinement_threshold:
         print(f"  Subdividing {len(recurrent_indices)} boxes...")
         model.grid.subdivide(recurrent_indices)
         
-        # Optional: Local map graph update optimization could be implemented here
-        # For now, we recompute the entire map graph at each iteration
+        # Optional: Local BoxMap update optimization could be implemented here
+        # For now, we recompute the entire BoxMap at each iteration
     
     # Return final results
-    final_map_graph = model.compute_map_graph()
-    final_morse_graph = compute_morse_graph(final_map_graph)
+    final_box_map = model.compute_box_map()
+    final_morse_graph = compute_morse_graph(final_box_map)
     
     return final_morse_graph, refinement_history
 

@@ -181,11 +181,11 @@ def main():
     # Create model with learned dynamics
     model = Model(grid, learned_dynamics)
     
-    # Compute map graph and Morse decomposition
-    map_graph = model.compute_map_graph()
-    morse_graph = compute_morse_graph(map_graph)
+    # Compute BoxMap and Morse decomposition
+    box_map = model.compute_box_map()
+    morse_graph = compute_morse_graph(box_map)
     
-    print(f"Learned dynamics map graph: {len(map_graph.nodes())} nodes, {len(map_graph.edges())} edges")
+    print(f"Learned dynamics BoxMap: {len(box_map.nodes())} nodes, {len(box_map.edges())} edges")
     print(f"Learned dynamics Morse graph: {len(morse_graph.nodes())} non-trivial Morse sets")
     
     # 6. Visualize Results

@@ -137,10 +137,10 @@ def main():
     # Create initial computation for comparison
     initial_grid = AdaptiveGrid(bounds=domain, max_depth=8)
     initial_model = Model(initial_grid, dynamics)
-    initial_map_graph = initial_model.compute_map_graph()
+    initial_box_map = initial_model.compute_box_map()
     
     from MorseGraph.analysis import compute_morse_graph
-    initial_morse_graph = compute_morse_graph(initial_map_graph)
+    initial_morse_graph = compute_morse_graph(initial_box_map)
     
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     
