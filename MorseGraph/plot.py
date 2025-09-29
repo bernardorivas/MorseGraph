@@ -1,143 +1,107 @@
-'''
-Visualization utilities for the MorseGraph library.
-
-This module provides functions to plot:
-- The Morse graph (Hasse diagram).
-- The Morse sets (recurrent components) on the grid.
-- The basins of attraction for attracting sets.
-'''
-
-from typing import Dict, List, Set, Optional, Tuple
-import networkx as nx
 import numpy as np
+import networkx as nx
 import matplotlib.pyplot as plt
+from matplotlib.collections import PatchCollection
 from matplotlib.patches import Rectangle
+from typing import Dict, Set, FrozenSet
 
-# Use try-except for type hinting to avoid circular imports
-try:
-    from .grids import AbstractGrid
-except ImportError:
-    from morsegraph.grids import AbstractGrid
+from .grids import AbstractGrid
 
-
-def plot_morse_graph(morse_graph: nx.DiGraph, morse_sets: Dict[int, Set[int]], output_path: str = 'morse_graph.png') -> None:
+def plot_morse_sets(grid: AbstractGrid, morse_graph_or_sets, ax: plt.Axes = None, **kwargs):
     """
-    Visualizes the Morse graph using pygraphviz and saves it to a file.
+    Plots the Morse sets on a grid.
 
-    Each node in the graph is labeled with its Morse set ID and the number of
-    boxes it contains.
-
-    :param morse_graph: A networkx.DiGraph representing the Morse graph.
-    :param morse_sets: A mapping from Morse node ID to the set of boxes it contains.
-    :param output_path: The path to save the output image file.
+    :param grid: The grid object used for the computation.
+    :param morse_graph_or_sets: Either a networkx DiGraph (morse graph) or a set of frozensets containing box indices
+    :param ax: The matplotlib axes to plot on. If None, a new figure and axes are created.
+    :param kwargs: Additional keyword arguments to pass to the PatchCollection.
     """
-    try:
-        import pygraphviz as pgv
-    except ImportError:
-        print("Warning: pygraphviz is not installed. Cannot plot Morse graph.")
-        print("Please install it via `pip install pygraphviz` (requires graphviz system library)." )
-        return
-
-    A = pgv.AGraph(directed=True, strict=True, rankdir='TB')
-
-    for i, node_id in enumerate(morse_graph.nodes()):
-        scc = morse_sets.get(node_id, set())
-        node_label = f"M({node_id})\n({len(scc)} boxes)"
-        A.add_node(node_id, label=node_label, shape="ellipse")
-
-    for u, v in morse_graph.edges():
-        A.add_edge(u, v)
-
-    try:
-        A.layout(prog='dot')
-        A.draw(output_path)
-        print(f"Morse graph saved to {output_path}")
-    except Exception as e:
-        print(f"Error drawing graph with pygraphviz: {e}")
-        print("Please ensure the graphviz system package is installed (e.g., `brew install graphviz` or `sudo apt-get install graphviz`).")
-
-
-def plot_morse_sets(
-    grid: AbstractGrid,
-    morse_sets: Dict[int, Set[int]],
-    ax: Optional[plt.Axes] = None,
-    cmap: str = 'viridis'
-) -> None:
-    """
-    Plots the boxes corresponding to each Morse set in 2D.
-
-    :param grid: The grid object used for the analysis.
-    :param morse_sets: A mapping from Morse node ID to the set of boxes it contains.
-    :param ax: A matplotlib axes object to plot on. If None, a new one is created.
-    :param cmap: The colormap to use for coloring the Morse sets.
-    """
-    if grid.D != 2:
-        raise ValueError("This plotting function only supports 2D grids.")
-
     if ax is None:
-        fig, ax = plt.subplots(figsize=(10, 8))
+        fig, ax = plt.subplots()
 
-    colors = plt.cm.get_cmap(cmap, len(morse_sets))
+    # Handle both morse graph (nx.DiGraph) and set of frozensets
+    if hasattr(morse_graph_or_sets, 'nodes'):
+        # It's a networkx graph
+        morse_sets = morse_graph_or_sets.nodes()
+    else:
+        # It's already a set of frozensets
+        morse_sets = morse_graph_or_sets
 
-    for i, (node_id, boxes) in enumerate(morse_sets.items()):
-        color = colors(i)
-        for box_index in boxes:
-            coords = grid.get_box_coordinates(box_index)
-            x_min, y_min = coords[:, 0]
-            width, height = coords[:, 1] - coords[:, 0]
-            rect = Rectangle(
-                (x_min, y_min), width, height,
-                facecolor=color, alpha=0.7, edgecolor='none'
-            )
-            ax.add_patch(rect)
+    # Get all boxes from the grid
+    all_boxes = grid.get_boxes()
+    
+    rects = []
+    colors = []
+    import matplotlib.cm as cm
+    import matplotlib.colors as mcolors
+    
+    # Create a colormap for different Morse sets
+    num_sets = len(morse_sets)
+    if num_sets > 0:
+        cmap = cm.get_cmap('tab10')
+        
+        for i, morse_set in enumerate(morse_sets):
+            color = cmap(i / max(num_sets, 10))
+            for box_index in morse_set:
+                if box_index < len(all_boxes):
+                    box = all_boxes[box_index]
+                    rect = Rectangle((box[0, 0], box[0, 1]), 
+                                   box[1, 0] - box[0, 0], 
+                                   box[1, 1] - box[0, 1])
+                    rects.append(rect)
+                    colors.append(color)
 
-    ax.set_xlim(grid.bounds[0, :])
-    ax.set_ylim(grid.bounds[1, :])
-    ax.set_title("Morse Sets")
-    ax.set_xlabel("State x_0")
-    ax.set_ylabel("State x_1")
+    if rects:
+        pc = PatchCollection(rects, facecolors=colors, alpha=0.7, **kwargs)
+        ax.add_collection(pc)
 
+    ax.set_xlim(grid.bounds[0, 0], grid.bounds[1, 0])
+    ax.set_ylim(grid.bounds[0, 1], grid.bounds[1, 1])
+    ax.set_aspect('equal', adjustable='box')
 
-def plot_basins_of_attraction(
-    grid: AbstractGrid,
-    basins: Dict[int, Set[int]],
-    attractor_sets: Dict[int, Set[int]],
-    ax: Optional[plt.Axes] = None,
-    cmap: str = 'viridis'
-) -> None:
+def plot_basins_of_attraction(grid: AbstractGrid, basins: Dict[FrozenSet[int], Set[int]], ax: plt.Axes = None, **kwargs):
     """
-    Plots the basins of attraction for each attractor in 2D.
+    Plots the basins of attraction.
 
-    :param grid: The grid object.
-    :param basins: A dictionary mapping attractor ID to its set of basin boxes.
-    :param attractor_sets: A dictionary mapping attractor ID to its set of boxes (the Morse set).
-    :param ax: A matplotlib axes object to plot on. If None, a new one is created.
-    :param cmap: The colormap to use.
+    :param grid: The grid object used for the computation.
+    :param basins: A dictionary mapping attractors to their basins.
+    :param ax: The matplotlib axes to plot on. If None, a new figure and axes are created.
+    :param kwargs: Additional keyword arguments to pass to the PatchCollection.
     """
-    if grid.D != 2:
-        raise ValueError("This plotting function only supports 2D grids.")
-
     if ax is None:
-        fig, ax = plt.subplots(figsize=(10, 8))
+        fig, ax = plt.subplots()
 
-    colors = plt.cm.get_cmap(cmap, len(basins))
+    colors = plt.cm.get_cmap('viridis', len(basins))
+    
+    for i, (attractor, basin) in enumerate(basins.items()):
+        rects = []
+        for box_index in basin:
+            box = grid.get_boxes([box_index])[0]
+            rect = Rectangle((box[0, 0], box[0, 1]), box[1, 0] - box[0, 0], box[1, 1] - box[0, 1])
+            rects.append(rect)
+        
+        pc = PatchCollection(rects, facecolor=colors(i), **kwargs)
+        ax.add_collection(pc)
 
-    # Plot basins with low alpha
-    for i, (attractor_id, basin_boxes) in enumerate(basins.items()):
-        color = colors(i)
-        is_first_box = True
-        for box_index in basin_boxes:
-            coords = grid.get_box_coordinates(box_index)
-            x_min, y_min = coords[:, 0]
-            width, height = coords[:, 1] - coords[:, 0]
-            rect = Rectangle(
-                (x_min, y_min), width, height,
-                facecolor=color, alpha=0.3, edgecolor=None
-            )
-            ax.add_patch(rect)
+    ax.set_xlim(grid.bounds[0, 0], grid.bounds[1, 0])
+    ax.set_ylim(grid.bounds[0, 1], grid.bounds[1, 1])
+    ax.set_aspect('equal', adjustable='box')
+    plt.show()
 
-    # Plot morse sets
-    plot_morse_sets(grid, attractor_sets, ax=ax, cmap=cmap)
+def plot_morse_graph(morse_graph: nx.DiGraph, ax: plt.Axes = None, **kwargs):
+    """
+    Plots the Morse graph.
 
-    ax.set_title("Basins of Attraction")
-    ax.legend()
+    :param morse_graph: The Morse graph to plot.
+    :param ax: The matplotlib axes to plot on. If None, a new figure and axes are created.
+    :param kwargs: Additional keyword arguments to pass to networkx.draw.
+    """
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    # Create a mapping from frozenset to a shorter string representation
+    node_labels = {node: str(i) for i, node in enumerate(morse_graph.nodes())}
+    
+    pos = nx.spring_layout(morse_graph)
+    nx.draw(morse_graph, pos, ax=ax, labels=node_labels, **kwargs)
+    plt.show()
