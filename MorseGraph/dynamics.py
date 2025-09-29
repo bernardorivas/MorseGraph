@@ -1,283 +1,326 @@
-'''
-Defines the dynamics abstraction for the MorseGraph library.
-
-This module provides the `Dynamics` abstract base class (ABC) and several
-concrete implementations for different ways of defining a dynamical system:
-- `BoxMapFunction`: For dynamics defined by an explicit Python function f(x).
-- `BoxMapODE`: For dynamics defined by an ordinary differential equation dx/dt = f(t, x).
-- `BoxMapData`: For dynamics learned from a dataset of input/output points (x, f(x)).
-- `LearnedDynamics`: Placeholder for dynamics from a trained neural network.
-'''
-
 from abc import ABC, abstractmethod
 import numpy as np
+from typing import Callable
+import itertools
+from scipy.spatial import cKDTree
 from scipy.integrate import solve_ivp
-
 
 class Dynamics(ABC):
     """
-    Abstract base class for dynamical systems.
-
-    The core purpose of a Dynamics object is to take a box in the state space
-    and return an outer approximation of where that box maps to under the
-    system's dynamics.
+    Abstract base class for a dynamical system.
     """
-
     @abstractmethod
     def __call__(self, box: np.ndarray) -> np.ndarray:
         """
-        Maps a box to its image, returning an outer-approximating bounding box.
+        Apply the dynamics to a box in the state space.
 
-        :param box: A numpy array of shape (D, 2) representing the box,
-                    where D is the dimension, and each row is [min, max].
-        :return: A numpy array for the image box in the same format.
+        :param box: A numpy array of shape (2, D) representing the lower and upper
+                    bounds of a D-dimensional box.
+        :return: A numpy array of shape (2, D) representing the bounding box
+                 of the image of the input box under the dynamics.
         """
         pass
 
-
 class BoxMapFunction(Dynamics):
     """
-    Represents dynamics defined by a mathematical function f: R^D -> R^D.
-
-    The box mapping is estimated by sampling points within the box, applying the
-    function, and computing the bloated bounding box of the image points.
+    A dynamical system defined by an explicit function.
     """
-
-    def __init__(self, func: callable, dimension: int, sample_points: int = 100, bloat_factor: float = 0.1):
+    def __init__(self, map_f: Callable[[np.ndarray], np.ndarray], epsilon: float = 1e-6):
         """
-        :param func: A callable, vectorized function that takes a numpy array (N, D)
-                     and returns a numpy array (N, D).
-        :param dimension: The dimension D of the state space.
-        :param sample_points: Number of points to sample inside a box to estimate its image.
-        :param bloat_factor: Factor by which to bloat the computed image box to ensure
-                             it's an outer approximation.
+        :param map_f: The function defining the dynamics. It takes a D-dimensional
+                      point and returns a D-dimensional point.
+        :param epsilon: The bloating factor to guarantee an outer approximation.
         """
-        self.func = func
-        self.D = dimension
-        self.sample_points = sample_points
-        self.bloat_factor = bloat_factor
+        self.map_f = map_f
+        self.epsilon = epsilon
 
     def __call__(self, box: np.ndarray) -> np.ndarray:
-        # 1. Generate 'sample_points' random points uniformly within the input 'box'.
-        random_samples = np.random.rand(self.sample_points, self.D)
-        box_widths = (box[:, 1] - box[:, 0]).reshape(1, -1)
-        box_mins = box[:, 0].reshape(1, -1)
-        samples_in_box = random_samples * box_widths + box_mins
-
-        # 2. Apply the function f to the samples.
-        try:
-            image_points = self.func(samples_in_box)
-        except Exception as e:
-            raise RuntimeError(f"Error applying function to samples: {e}")
-
-        if image_points.shape != samples_in_box.shape:
-            raise ValueError(
-                f"Function output shape {image_points.shape} does not match expected shape {samples_in_box.shape}."
-            )
-
-        # 3. Compute the minimum bounding box of the image points.
-        image_box = np.array([
-            [np.min(image_points[:, d]), np.max(image_points[:, d])]
-            for d in range(self.D)
-        ])
-
-        # 4. Add bloating to create an outer approximation.
-        box_sizes = image_box[:, 1] - image_box[:, 0]
-        bloat_amount = box_sizes * self.bloat_factor / 2.0
-        image_box[:, 0] -= bloat_amount
-        image_box[:, 1] += bloat_amount
-
-        return image_box
-
-
-class BoxMapODE(Dynamics):
-    """
-    Represents dynamics defined by an ordinary differential equation dx/dt = f(t, x).
-
-    The box mapping is estimated by integrating sample points over a time horizon tau.
-    """
-
-    def __init__(self, ode_func: callable, dimension: int, tau: float, sample_points: int = 10, bloat_factor: float = 0.1):
         """
-        :param ode_func: A callable function f(t, x) for the ODE.
-        :param dimension: The dimension D of the state space.
-        :param tau: The time horizon for integration.
-        :param sample_points: Number of points to sample inside a box.
-        :param bloat_factor: Factor by which to bloat the computed image box.
+        Computes the bounding box of the image of the input box under the map.
+
+        The bounding box is computed by sampling the corners and the center of the
+        input box, applying the map to these sample points, and then computing
+        the bounding box of the resulting points. This bounding box is then
+        "bloated" by epsilon.
+
+        :param box: A numpy array of shape (2, D) representing the lower and upper
+                    bounds of a D-dimensional box.
+        :return: A numpy array of shape (2, D) representing the bloated
+                 bounding box of the image.
         """
-        self.ode_func = ode_func
-        self.D = dimension
-        self.tau = tau
-        self.sample_points = sample_points
-        self.bloat_factor = bloat_factor
+        dim = box.shape[1]
+        
+        # Generate all 2^D corners of the box
+        corner_points = list(itertools.product(*zip(box[0], box[1])))
+        
+        # Add the center of the box
+        center_point = (box[0] + box[1]) / 2
+        
+        sample_points = np.array(corner_points + [center_point])
 
-    def __call__(self, box: np.ndarray) -> np.ndarray:
-        # 1. Sample points in the box (for now, just corners).
-        # A more robust implementation might use random sampling as in BoxMapFunction.
-        num_corners = 2 ** self.D
-        corner_indices = np.array(list(np.binary_repr(i, width=self.D) for i in range(num_corners))).astype(int)
-        corners = np.array([box[d, corner_indices[:, d]] for d in range(self.D)]).T
+        # Apply the map to the sample points
+        image_points = np.array([self.map_f(p) for p in sample_points])
 
-        # 2. Integrate each sample point for time tau.
-        final_points = []
-        for point in corners:
-            try:
-                sol = solve_ivp(self.ode_func, (0, self.tau), point, dense_output=False, max_step=self.tau / 10)
-                final_points.append(sol.y[:, -1])
-            except Exception as e:
-                # If integration fails, we can't determine the image; return invalid box.
-                return np.full((self.D, 2), np.nan)
+        # Compute the bounding box of the image points
+        min_bounds = np.min(image_points, axis=0)
+        max_bounds = np.max(image_points, axis=0)
 
-        image_points = np.array(final_points)
+        # Bloat the bounding box
+        min_bounds -= self.epsilon
+        max_bounds += self.epsilon
 
-        # 3. Compute the minimum bounding box of the image points.
-        image_box = np.array([
-            [np.min(image_points[:, d]), np.max(image_points[:, d])]
-            for d in range(self.D)
-        ])
-
-        # 4. Add bloating.
-        box_sizes = image_box[:, 1] - image_box[:, 0]
-        bloat_amount = box_sizes * self.bloat_factor / 2.0
-        image_box[:, 0] -= bloat_amount
-        image_box[:, 1] += bloat_amount
-
-        return image_box
+        return np.array([min_bounds, max_bounds])
 
 
 class BoxMapData(Dynamics):
     """
-    Represents dynamics from a dataset of input-output pairs (X, Y).
+    A dynamical system defined by data points (X, Y).
     """
-
-    def __init__(self, X: np.ndarray, Y: np.ndarray, bloat_factor: float = 0.1):
+    def __init__(self, X: np.ndarray, Y: np.ndarray, epsilon: float = 1e-6):
         """
-        :param X: Input data points, shape (N, D).
-        :param Y: Output data points, shape (N, D), where Y[i] = f(X[i]).
-        :param bloat_factor: Factor by which to bloat the computed image box.
+        :param X: A numpy array of shape (N, D) of input data points.
+        :param Y: A numpy array of shape (N, D) of output data points.
+        :param epsilon: The bloating factor to guarantee an outer approximation.
         """
-        if X.shape != Y.shape:
-            raise ValueError("Input X and output Y must have the same shape.")
-        self.X = X
+        self.kdtree = cKDTree(X)
         self.Y = Y
-        self.D = X.shape[1]
-        self.bloat_factor = bloat_factor
+        self.epsilon = epsilon
 
     def __call__(self, box: np.ndarray) -> np.ndarray:
-        # 1. Find all points in X that are inside the given box.
-        lower_bounds = box[:, 0]
-        upper_bounds = box[:, 1]
-        mask = np.all((self.X >= lower_bounds) & (self.X <= upper_bounds), axis=1)
-
-        image_points = self.Y[mask]
-
-        if image_points.shape[0] == 0:
-            # Handle case where no data points are in the box.
-            # Return an invalid box of NaNs.
-            return np.full((self.D, 2), np.nan)
-
-        # 2. Compute the minimum bounding box of their images in Y.
-        image_box = np.array([
-            [np.min(image_points[:, d]), np.max(image_points[:, d])]
-            for d in range(self.D)
-        ])
-
-        # 3. Add bloating.
-        box_sizes = image_box[:, 1] - image_box[:, 0]
-        bloat_amount = box_sizes * self.bloat_factor / 2.0
-        image_box[:, 0] -= bloat_amount
-        image_box[:, 1] += bloat_amount
-
-        return image_box
-
-
-try:
-    import torch
-
-    class LearnedDynamics(Dynamics):
         """
-        Represents dynamics from a trained autoencoder and latent dynamics model.
+        Computes the bounding box of the image of the input box under the data-driven map.
+
+        The image is determined by finding all points in X that lie within the given box,
+        and then taking the corresponding points in Y.
+
+        :param box: A numpy array of shape (2, D) representing the lower and upper
+                    bounds of a D-dimensional box.
+        :return: A numpy array of shape (2, D) representing the bloated
+                 bounding box of the image.
         """
+        # Find indices of points in X that are inside the box
+        # A fast way to get a candidate set is to query for points in a ball that encloses the box
+        center = np.mean(box, axis=0)
+        # Use the diagonal of the box to define the radius of the enclosing ball
+        radius = np.linalg.norm(box[1] - box[0]) / 2.0
 
-        def __init__(self, encoder, dynamics_model, decoder, bloat_factor: float = 0.1):
-            """
-            :param encoder: Trained PyTorch model for encoding states.
-            :param dynamics_model: Trained PyTorch model for latent space dynamics.
-            :param decoder: Trained PyTorch model for decoding states.
-            :param bloat_factor: Factor for bloating.
-            """
-            if not hasattr(torch, 'nn'):
-                raise ImportError("PyTorch is required for LearnedDynamics. Please install it.")
-            self.encoder = encoder
-            self.dynamics_model = dynamics_model
-            self.decoder = decoder
-            self.bloat_factor = bloat_factor
+        candidate_indices = self.kdtree.query_ball_point(center, r=radius, return_sorted=True)
 
-        def __call__(self, box: np.ndarray) -> np.ndarray:
-            # Ensure models are in evaluation mode
-            self.encoder.eval()
-            self.dynamics_model.eval()
-            self.decoder.eval()
+        if not candidate_indices:
+            return np.array([[np.inf, np.inf], [-np.inf, -np.inf]])
 
-            D = box.shape[0]
+        # Filter the candidates to get only the points strictly inside the box
+        X_candidates = self.kdtree.data[candidate_indices]
+        in_box_mask = np.all((X_candidates >= box[0]) & (X_candidates <= box[1]), axis=1)
+        image_indices = np.array(candidate_indices)[in_box_mask]
 
-            # 1. Sample points (corners) from the input box.
-            num_corners = 2 ** D
-            corner_indices = np.array(list(np.binary_repr(i, width=D) for i in range(num_corners))).astype(int)
-            corners = np.array([box[d, corner_indices[:, d]] for d in range(D)]).T
+        if image_indices.size == 0:
+            return np.array([[np.inf, np.inf], [-np.inf, -np.inf]])
+
+        # Get the corresponding points in Y
+        image_points = self.Y[image_indices]
+
+        # Compute the bounding box of the image points
+        min_bounds = np.min(image_points, axis=0)
+        max_bounds = np.max(image_points, axis=0)
+
+        # Bloat the bounding box
+        min_bounds -= self.epsilon
+        max_bounds += self.epsilon
+
+        return np.array([min_bounds, max_bounds])
+
+class BoxMapODE(Dynamics):
+    """
+    A dynamical system defined by an ordinary differential equation.
+    """
+    def __init__(self, ode_f: Callable[[float, np.ndarray], np.ndarray], tau: float, epsilon: float = 1e-6):
+        """
+        :param ode_f: The function defining the ODE, f(t, y).
+        :param tau: The integration time.
+        :param epsilon: The bloating factor.
+        """
+        self.ode_f = ode_f
+        self.tau = tau
+        self.epsilon = epsilon
+
+    def __call__(self, box: np.ndarray) -> np.ndarray:
+        """
+        Computes the bounding box of the image of the input box under the ODE flow.
+
+        :param box: A numpy array of shape (2, D).
+        :return: A numpy array of shape (2, D) for the bloated bounding box of the image.
+        """
+        dim = box.shape[1]
+
+        # Sample points from the box (corners and center)
+        corner_points = list(itertools.product(*zip(box[0], box[1])))
+        center_point = (box[0] + box[1]) / 2
+        sample_points = np.array(corner_points + [center_point])
+
+        # Integrate the ODE for each sample point
+        image_points = []
+        for p in sample_points:
+            sol = solve_ivp(self.ode_f, [0, self.tau], p, t_eval=[self.tau])
+            image_points.append(sol.y[:, -1])
+
+        image_points = np.array(image_points)
+
+        # Compute the bounding box of the final points
+        min_bounds = np.min(image_points, axis=0)
+        max_bounds = np.max(image_points, axis=0)
+
+        # Bloat the bounding box
+        min_bounds -= self.epsilon
+        max_bounds += self.epsilon
+
+        return np.array([min_bounds, max_bounds])
+
+
+class LearnedMapDynamics(Dynamics):
+    """
+    A dynamical system defined by a learned function in latent space.
+    
+    This class wraps a learned dynamics model (implementing AbstractLatentDynamics)
+    into the rigorous BoxMap framework. The dynamics operate entirely in the latent
+    space - the associated grid must also be defined in the latent space dimensions.
+    """
+    
+    def __init__(self, dynamics_model, bloating: float = 1e-6):
+        """
+        :param dynamics_model: Any model implementing AbstractLatentDynamics interface
+                              (has predict method)
+        :param bloating: Epsilon expansion factor for outer approximation
+        """
+        # Check if the model has the expected interface
+        if not hasattr(dynamics_model, 'predict'):
+            raise ValueError("dynamics_model must have a 'predict' method")
+        
+        self.dynamics_model = dynamics_model
+        self.epsilon = bloating
+    
+    def __call__(self, latent_box: np.ndarray) -> np.ndarray:
+        """
+        Apply learned dynamics to a box in latent space.
+        
+        :param latent_box: A numpy array of shape (2, D) representing bounds 
+                          in the D-dimensional latent space
+        :return: Bounding box of the image under learned dynamics
+        """
+        dim = latent_box.shape[1]
+        
+        # Sample points from the latent box (corners and center)
+        corner_points = list(itertools.product(*zip(latent_box[0], latent_box[1])))
+        center_point = (latent_box[0] + latent_box[1]) / 2
+        sample_points = np.array(corner_points + [center_point])
+        
+        # Apply the learned dynamics
+        image_points = self.dynamics_model.predict(sample_points)
+        
+        # Compute bounding box of image points
+        min_bounds = np.min(image_points, axis=0)
+        max_bounds = np.max(image_points, axis=0)
+        
+        # Apply bloating for outer approximation
+        min_bounds -= self.epsilon
+        max_bounds += self.epsilon
+        
+        return np.array([min_bounds, max_bounds])
+
+
+class LinearMapDynamics(Dynamics):
+    """
+    Optimized dynamics for linear models (e.g., from DMD).
+    
+    Since linear dynamics are defined by a matrix A (Z_next = A @ Z_current),
+    we can optimize by only mapping the corners of the input box.
+    """
+    
+    def __init__(self, linear_matrix: np.ndarray, bloating: float = 1e-6):
+        """
+        :param linear_matrix: The linear transformation matrix A of shape (D, D)
+        :param bloating: Epsilon expansion factor for outer approximation
+        """
+        self.A = linear_matrix
+        self.epsilon = bloating
+    
+    def __call__(self, latent_box: np.ndarray) -> np.ndarray:
+        """
+        Apply linear dynamics to a box in latent space.
+        
+        For linear dynamics Z_next = A @ Z, we only need to map the corners
+        since the image of a box under linear transformation is determined
+        by the images of its corners.
+        
+        :param latent_box: Box in latent space of shape (2, D)
+        :return: Bounding box of the image under linear dynamics
+        """
+        dim = latent_box.shape[1]
+        
+        # Generate all corners of the box
+        corner_points = list(itertools.product(*zip(latent_box[0], latent_box[1])))
+        corner_points = np.array(corner_points)
+        
+        # Apply linear transformation: image = A @ corners.T
+        image_points = (self.A @ corner_points.T).T
+        
+        # Compute bounding box
+        min_bounds = np.min(image_points, axis=0)
+        max_bounds = np.max(image_points, axis=0)
+        
+        # Apply bloating
+        min_bounds -= self.epsilon
+        max_bounds += self.epsilon
+        
+        return np.array([min_bounds, max_bounds])
+
+
+class GridDilatedDynamics(Dynamics):
+    """
+    A wrapper that applies grid dilation for rigorous outer approximation.
+    
+    This class implements the "Grid Dilation" strategy by expanding results
+    in discrete grid space rather than continuous phase space.
+    """
+    
+    def __init__(self, base_dynamics: Dynamics, grid, dilation_radius: int = 1):
+        """
+        :param base_dynamics: The underlying dynamics to wrap
+        :param grid: The AbstractGrid instance used for discretization
+        :param dilation_radius: Number of neighboring layers to include
+        """
+        self.base_dynamics = base_dynamics
+        self.grid = grid
+        self.radius = dilation_radius
+    
+    def __call__(self, box: np.ndarray) -> np.ndarray:
+        """
+        Apply base dynamics and then dilate the result in grid space.
+        
+        :param box: Input box in phase space
+        :return: Union of boxes after grid dilation
+        """
+        # 1. Apply base dynamics to get target box
+        target_box = self.base_dynamics(box)
+        
+        # 2. Find grid indices that intersect with target box
+        target_indices = self.grid.box_to_indices(target_box)
+        
+        # 3. Apply grid dilation to expand the indices
+        dilated_indices = self.grid.dilate_indices(target_indices, self.radius)
+        
+        # 4. Get all boxes corresponding to dilated indices
+        if len(dilated_indices) == 0:
+            return target_box  # Return original if no valid indices
             
-            with torch.no_grad():
-                # Convert to tensor
-                corners_tensor = torch.from_numpy(corners).float()
-
-                # 2. Encode these points into the latent space.
-                latent_points = self.encoder(corners_tensor)
-
-                # 3. Compute the bounding box of the encoded points.
-                latent_dim = latent_points.shape[1]
-                latent_box = np.array([
-                    [torch.min(latent_points[:, d]).item(), torch.max(latent_points[:, d]).item()]
-                    for d in range(latent_dim)
-                ])
-
-                # 4. Apply the latent dynamics model to the corners of this latent box.
-                latent_corners_indices = np.array(list(np.binary_repr(i, width=latent_dim) for i in range(2**latent_dim)))
-                latent_corners_indices = latent_corners_indices.astype(int)
-                latent_corners = np.array([latent_box[d, latent_corners_indices[:, d]] for d in range(latent_dim)]).T
-                latent_corners_tensor = torch.from_numpy(latent_corners).float()
-
-                image_latent_points = self.dynamics_model(latent_corners_tensor)
-
-                # 5. Compute the bounding box of the resulting latent points.
-                image_latent_box = np.array([
-                    [torch.min(image_latent_points[:, d]).item(), torch.max(image_latent_points[:, d]).item()]
-                    for d in range(latent_dim)
-                ])
-
-                # 6. Decode the corners of this latent image box back to the original space.
-                image_latent_corners_indices = np.array(list(np.binary_repr(i, width=latent_dim) for i in range(2**latent_dim)))
-                image_latent_corners_indices = image_latent_corners_indices.astype(int)
-                image_latent_corners = np.array([image_latent_box[d, image_latent_corners_indices[:, d]] for d in range(latent_dim)]).T
-                image_latent_corners_tensor = torch.from_numpy(image_latent_corners).float()
-                
-                decoded_points = self.decoder(image_latent_corners_tensor)
-
-            # 7. Compute the final bounding box of the decoded points and apply bloating.
-            final_box = np.array([
-                [torch.min(decoded_points[:, d]).item(), torch.max(decoded_points[:, d]).item()]
-                for d in range(D)
-            ])
-
-            box_sizes = final_box[:, 1] - final_box[:, 0]
-            bloat_amount = box_sizes * self.bloat_factor / 2.0
-            final_box[:, 0] -= bloat_amount
-            final_box[:, 1] += bloat_amount
-
-            return final_box
-
-
-except ImportError:
-    # If torch is not installed, create a dummy class that raises an error upon instantiation.
-    class LearnedDynamics:
-        def __init__(self, *args, **kwargs):
-            raise ImportError("PyTorch is required for LearnedDynamics. Please install it via `pip install torch` or `pip install morsegraph[ml]`.")
+        all_boxes = self.grid.get_boxes()
+        dilated_boxes = all_boxes[dilated_indices]
+        
+        # 5. Compute the union bounding box of all dilated boxes
+        all_min_bounds = dilated_boxes[:, 0, :]  # Shape: (n_boxes, dim)
+        all_max_bounds = dilated_boxes[:, 1, :]
+        
+        union_min = np.min(all_min_bounds, axis=0)
+        union_max = np.max(all_max_bounds, axis=0)
+        
+        return np.array([union_min, union_max])
