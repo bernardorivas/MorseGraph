@@ -34,13 +34,14 @@ def main():
     print("\n1. Setting up dynamics and grid...")
     
     # Define the domain for the grid
-    domain = np.array([[-1.5, -0.4], [1.5, 0.4]])
+    domain = np.array([[-2.5, -0.5], [2.5, 0.5]])
     
     # Create the dynamics object
     dynamics = BoxMapFunction(henon_map, epsilon=0.01)
     
     # Create a grid
-    divisions = np.array([64, 64])  # Reduced size for faster computation
+    grid_x, grid_y = 8, 8
+    divisions = np.array([int(2**int(grid_x)), int(2**int(grid_y))], dtype=int)
     grid = UniformGrid(bounds=domain, divisions=divisions)
     
     # Create the model
