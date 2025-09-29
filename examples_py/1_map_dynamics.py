@@ -52,10 +52,10 @@ def main():
     # 2. Compute the Morse Graph
     print("\n2. Computing Morse graph...")
     
-    map_graph = model.compute_map_graph()
-    morse_graph = compute_morse_graph(map_graph)
+    box_map = model.compute_box_map()
+    morse_graph = compute_morse_graph(box_map)
     
-    print(f"Map graph has {len(map_graph.nodes())} nodes and {len(map_graph.edges())} edges")
+    print(f"BoxMap has {len(box_map.nodes())} nodes and {len(box_map.edges())} edges")
     print(f"Morse graph has {len(morse_graph.nodes())} non-trivial Morse sets")
     
     # Print details of Morse sets

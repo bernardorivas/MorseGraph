@@ -86,14 +86,14 @@ def main():
     print(f"Created grid with {len(grid.get_boxes())} boxes")
     print(f"Using {len(X)} data points for dynamics")
     
-    # 3. Compute the state transition graph (map graph)
-    print("\n3. Computing map graph...")
-    map_graph = model.compute_map_graph()
-    print(f"Map graph computed with {len(map_graph.nodes())} nodes and {len(map_graph.edges())} edges")
+    # 3. Compute the BoxMap (discrete dynamical system)
+    print("\n3. Computing BoxMap...")
+    box_map = model.compute_box_map()
+    print(f"BoxMap computed with {len(box_map.nodes())} nodes and {len(box_map.edges())} edges")
     
-    # 4. Compute the Morse graph from the map graph
+    # 4. Compute the Morse graph from the BoxMap
     print("\n4. Computing Morse graph...")
-    morse_graph = compute_morse_graph(map_graph)
+    morse_graph = compute_morse_graph(box_map)
     print(f"Morse graph has {len(morse_graph.nodes())} non-trivial Morse sets")
     
     # Print details of Morse sets

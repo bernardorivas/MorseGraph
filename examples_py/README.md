@@ -93,7 +93,8 @@ Each example saves figures to the same directory:
 - **`AdaptiveGrid`**: Tree-based adaptive refinement (Quadtree/Octree)
 
 ### Analysis Tools
-- **`compute_morse_graph`**: Extract non-trivial strongly connected components
+- **`compute_box_map`**: Compute the discrete dynamical system on grid boxes (BoxMap)
+- **`compute_morse_graph`**: Extract non-trivial strongly connected components from BoxMap
 - **`iterative_morse_computation`**: Adaptive refinement workflow
 - **`plot_morse_sets`**: Visualization of Morse decomposition
 

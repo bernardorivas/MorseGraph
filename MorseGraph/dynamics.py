@@ -36,12 +36,12 @@ class BoxMapFunction(Dynamics):
 
     def __call__(self, box: np.ndarray) -> np.ndarray:
         """
-        Computes the bounding box of the image of the input box under the map.
+        Computes a bounding box of the image of the input box under the map.
 
         The bounding box is computed by sampling the corners and the center of the
         input box, applying the map to these sample points, and then computing
         the bounding box of the resulting points. This bounding box is then
-        "bloated" by epsilon.
+        "bloated" by eps%.
 
         :param box: A numpy array of shape (2, D) representing the lower and upper
                     bounds of a D-dimensional box.
