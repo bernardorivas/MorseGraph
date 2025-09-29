@@ -25,23 +25,32 @@ class BoxMapFunction(Dynamics):
     """
     A dynamical system defined by an explicit function.
     """
-    def __init__(self, map_f: Callable[[np.ndarray], np.ndarray], epsilon: float = 1e-6):
+    def __init__(self, map_f: Callable[[np.ndarray], np.ndarray], epsilon: float = 1e-6, 
+                 evaluation_method: str = "corners", num_random_points: int = 10):
         """
         :param map_f: The function defining the dynamics. It takes a D-dimensional
                       point and returns a D-dimensional point.
         :param epsilon: The bloating factor to guarantee an outer approximation.
+        :param evaluation_method: Method for evaluating the function on the box.
+                                 Options: "corners", "center", "random"
+        :param num_random_points: Number of random points to use when evaluation_method="random"
         """
         self.map_f = map_f
         self.epsilon = epsilon
+        self.evaluation_method = evaluation_method
+        self.num_random_points = num_random_points
+        
+        if evaluation_method not in ["corners", "center", "random"]:
+            raise ValueError("evaluation_method must be one of: 'corners', 'center', 'random'")
 
     def __call__(self, box: np.ndarray) -> np.ndarray:
         """
         Computes a bounding box of the image of the input box under the map.
 
-        The bounding box is computed by sampling the corners and the center of the
-        input box, applying the map to these sample points, and then computing
-        the bounding box of the resulting points. This bounding box is then
-        "bloated" by eps%.
+        The bounding box is computed by sampling points from the input box based on
+        the specified evaluation method, applying the map to these sample points, 
+        and then computing the bounding box of the resulting points. This bounding 
+        box is then "bloated" by epsilon.
 
         :param box: A numpy array of shape (2, D) representing the lower and upper
                     bounds of a D-dimensional box.
@@ -50,14 +59,27 @@ class BoxMapFunction(Dynamics):
         """
         dim = box.shape[1]
         
-        # Generate all 2^D corners of the box
-        corner_points = list(itertools.product(*zip(box[0], box[1])))
+        # Generate sample points based on evaluation method
+        if self.evaluation_method == "corners":
+            # Generate all 2^D corners of the box
+            corner_points = list(itertools.product(*zip(box[0], box[1])))
+            # Add the center of the box
+            center_point = (box[0] + box[1]) / 2
+            sample_points = np.array(corner_points + [center_point])
+            
+        elif self.evaluation_method == "center":
+            # Use only the center of the box
+            center_point = (box[0] + box[1]) / 2
+            sample_points = np.array([center_point])
+            
+        elif self.evaluation_method == "random":
+            # Generate random points inside the box
+            sample_points = np.random.uniform(
+                low=box[0], 
+                high=box[1], 
+                size=(self.num_random_points, dim)
+            )
         
-        # Add the center of the box
-        center_point = (box[0] + box[1]) / 2
-        
-        sample_points = np.array(corner_points + [center_point])
-
         # Apply the map to the sample points
         image_points = np.array([self.map_f(p) for p in sample_points])
 

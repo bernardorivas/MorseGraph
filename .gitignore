@@ -117,3 +117,7 @@ dmypy.json
 morsegraph.egg-info/
 build/
 .vscode/
+
+# Google, Anthropic, etc.
+.serena/
+.claude/
