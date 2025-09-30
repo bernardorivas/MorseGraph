@@ -243,37 +243,21 @@ class AdaptiveGrid(AbstractGrid):
         
         # Initialize with single root node
         self.root = self.TreeNode(bounds, 0, max_depth)
-        
-        # Maintain flat indexing for leaves
-        self._update_leaf_indices()
+        self.leaves = [self.root]
+        self.root.index = 0
+        self.leaf_map = {0: self.root}
     
-    def _update_leaf_indices(self):
-        """Update the flat indices of all leaf nodes."""
-        leaves = self._get_leaf_nodes()
-        for i, leaf in enumerate(leaves):
-            leaf.index = i
-    
-    def _get_leaf_nodes(self) -> List['AdaptiveGrid.TreeNode']:
-        """Get all leaf nodes in the tree."""
-        leaves = []
-        
-        def traverse(node):
-            if node.is_leaf:
-                leaves.append(node)
-            else:
-                for child in node.children:
-                    traverse(child)
-        
-        traverse(self.root)
-        return leaves
-    
+    def update_leaf_map(self):
+        self.leaf_map = {leaf.index: leaf for leaf in self.leaves}
+
     def get_boxes(self) -> np.ndarray:
         """Return all active boxes (leaf node bounds)."""
-        leaves = self._get_leaf_nodes()
-        if not leaves:
+        if not self.leaves:
             return np.empty((0, 2, self.dim))
         
-        boxes = np.array([leaf.bounds for leaf in leaves])
+        # Sort leaves by index to ensure consistent ordering
+        sorted_leaves = sorted(self.leaves, key=lambda leaf: leaf.index)
+        boxes = np.array([leaf.bounds for leaf in sorted_leaves])
         return boxes
     
     def box_to_indices(self, box: np.ndarray) -> np.ndarray:
@@ -290,31 +274,58 @@ class AdaptiveGrid(AbstractGrid):
         
         traverse(self.root)
         return np.array(intersecting_indices, dtype=int)
-    
-    def subdivide(self, indices: np.ndarray = None):
+
+    def get_boxes_by_index(self, indices: List[int]) -> np.ndarray:
+        """Return the bounds of boxes for the given indices."""
+        boxes = []
+        for i in indices:
+            if i in self.leaf_map:
+                boxes.append(self.leaf_map[i].bounds)
+        return np.array(boxes)
+
+    def subdivide(self, indices: np.ndarray = None) -> dict:
         """
         Subdivide specified leaf nodes. If indices is None, subdivide all leaves.
         
         :param indices: Indices of leaf nodes to subdivide
+        :return: A dictionary mapping the index of each subdivided parent box
+                 to a list of the indices of its new children.
         """
-        leaves = self._get_leaf_nodes()
-        
         if indices is None:
-            # Subdivide all leaves
-            nodes_to_subdivide = leaves
+            nodes_to_subdivide = list(self.leaves)
         else:
-            # Subdivide only specified leaves
-            nodes_to_subdivide = [leaves[i] for i in indices if i < len(leaves)]
-        
-        # Perform subdivisions
-        subdivided = False
-        for node in nodes_to_subdivide:
-            if node.subdivide():
-                subdivided = True
-        
-        # Update indices if any subdivision occurred
-        if subdivided:
-            self._update_leaf_indices()
+            nodes_to_subdivide = [self.leaf_map[i] for i in indices if i in self.leaf_map]
+
+        if not nodes_to_subdivide:
+            return {}
+
+        new_children_map = {}
+        next_index = max(self.leaf_map.keys()) + 1
+
+        leaves_to_remove = []
+        children_to_add = []
+
+        for leaf in nodes_to_subdivide:
+            parent_index = leaf.index
+            if leaf.subdivide():
+                leaves_to_remove.append(leaf)
+                
+                child_indices = []
+                for child in leaf.children:
+                    child.index = next_index
+                    children_to_add.append(child)
+                    child_indices.append(next_index)
+                    next_index += 1
+                
+                new_children_map[parent_index] = child_indices
+
+        if new_children_map:
+            for leaf in leaves_to_remove:
+                self.leaves.remove(leaf)
+            self.leaves.extend(children_to_add)
+            self.update_leaf_map()
+
+        return new_children_map
     
     def dilate_indices(self, indices: np.ndarray, radius: int = 1) -> np.ndarray:
         """
@@ -325,8 +336,7 @@ class AdaptiveGrid(AbstractGrid):
         if len(indices) == 0:
             return indices
         
-        leaves = self._get_leaf_nodes()
-        original_nodes = [leaves[i] for i in indices if i < len(leaves)]
+        original_nodes = [self.leaf_map[i] for i in indices if i in self.leaf_map]
         
         neighbor_nodes = set()
         

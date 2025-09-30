@@ -115,29 +115,92 @@ class BoxMapData(Dynamics):
     - Output perturbation: B(f(x), output_epsilon)
     - Grid dilation: expand to neighboring boxes
     
+    Handles empty boxes with different strategies:
+    - 'interpolate': Use neighboring boxes to estimate dynamics (default)
+    - 'outside': Map empty boxes outside the domain  
+    - 'terminate': Raise error if empty boxes are encountered
+    
     This implementation assumes uniform grid spacing and pre-assigns 
     data points to grid boxes for performance.
     """
     def __init__(self, X: np.ndarray, Y: np.ndarray, grid, 
-                 input_epsilon: float = 0, output_epsilon: float = 0,
-                 dilation_radius: int = 0):
+                 input_epsilon: float = None, output_epsilon: float = None,
+                 dilation_radius: int = 0, map_empty: str = 'interpolate'):
         """
         :param X: A numpy array of shape (N, D) of input data points.
         :param Y: A numpy array of shape (N, D) of output data points.
         :param grid: The UniformGrid instance used for discretization.
         :param input_epsilon: Input domain uncertainty - expand input boxes by this amount.
+                             If None, defaults to the minimum box size (full box width).
         :param output_epsilon: Output domain uncertainty - bloat output bounding boxes by this amount.
+                              If None, defaults to the minimum box size (full box width).
         :param dilation_radius: Grid dilation radius - include neighboring boxes (0 = no dilation).
+        :param map_empty: How to handle empty boxes: 'interpolate', 'outside', or 'terminate'.
         """
         self.X = X
         self.Y = Y
-        self.input_epsilon = input_epsilon
-        self.output_epsilon = output_epsilon
-        self.dilation_radius = dilation_radius
         self.grid = grid
+        self.map_empty = map_empty
+        
+        # Calculate default epsilon values if not provided
+        if input_epsilon is None or output_epsilon is None:
+            # Use the minimum box size as default epsilon (full box width)
+            # This follows CMGDB's domain_padding approach
+            default_epsilon = np.min(grid.box_size)
+            
+        self.input_epsilon = input_epsilon if input_epsilon is not None else default_epsilon
+        self.output_epsilon = output_epsilon if output_epsilon is not None else default_epsilon
+        self.dilation_radius = dilation_radius
         
         # Pre-assign each data point to its grid box
         self._assign_points_to_boxes()
+
+    @classmethod
+    def from_data(cls, X: np.ndarray, Y: np.ndarray, domain: np.ndarray = None, 
+                  grid_resolution: int = None, **kwargs):
+        """
+        Factory method to create BoxMapData with automatic grid setup.
+        
+        :param X: Input data points of shape (N, D)
+        :param Y: Output data points of shape (N, D)  
+        :param domain: Domain bounds of shape (2, D). If None, auto-detected from data.
+        :param grid_resolution: Grid resolution (2^resolution boxes per dimension). 
+                               If None, auto-selected based on data density.
+        :param kwargs: Additional arguments passed to BoxMapData constructor
+        :return: BoxMapData instance with automatically configured grid
+        """
+        from .grids import UniformGrid
+        
+        # Auto-detect domain if not provided
+        if domain is None:
+            # Use both X and Y to determine domain bounds
+            all_points = np.vstack([X, Y])
+            margin = 0.1  # 10% margin around data
+            data_min = np.min(all_points, axis=0)
+            data_max = np.max(all_points, axis=0)
+            data_range = data_max - data_min
+            
+            domain = np.array([
+                data_min - margin * data_range,
+                data_max + margin * data_range
+            ])
+        
+        # Auto-select grid resolution if not provided
+        if grid_resolution is None:
+            # Heuristic: aim for ~10-50 data points per box on average
+            n_points = len(X)
+            target_points_per_box = 20
+            target_boxes = max(16, n_points // target_points_per_box)
+            # Find resolution that gives approximately target_boxes total boxes
+            grid_resolution = int(np.log2(target_boxes**(1/len(domain[0]))))
+            grid_resolution = max(3, min(10, grid_resolution))  # Clamp to reasonable range
+        
+        # Create grid
+        divisions = np.full(len(domain[0]), 2**grid_resolution, dtype=int)
+        grid = UniformGrid(bounds=domain, divisions=divisions)
+        
+        # Create BoxMapData instance
+        return cls(X, Y, grid, **kwargs)
 
     def _assign_points_to_boxes(self):
         """Pre-compute which data points belong to each grid box."""
@@ -184,10 +247,11 @@ class BoxMapData(Dynamics):
         """
         Computes a bounding box of the image under the data-driven map.
         
-        Supports
+        Supports:
         1. Input perturbation: expands input box by input_epsilon
         2. Output perturbation: expands output image by output_epsilon  
         3. Grid dilation: include n-neighboring boxes in computation
+        4. Empty box handling: interpolate, outside, or terminate
         
         :param box: A numpy array of shape (2, D) representing the lower and upper
                     bounds of a D-dimensional box.
@@ -212,11 +276,9 @@ class BoxMapData(Dynamics):
             if box_idx in self.box_to_points:
                 all_point_indices.extend(self.box_to_points[box_idx])
         
-        # Since this method should only be called on active boxes,
-        # we should always have data points. But handle the edge case.
+        # Handle empty boxes according to strategy
         if not all_point_indices:
-            # This should not happen for active boxes, but return empty box if it does
-            return np.array([[np.inf, np.inf], [-np.inf, -np.inf]])
+            return self._handle_empty_box(box)
         
         # Get the corresponding points in Y
         image_points = self.Y[all_point_indices]
@@ -230,6 +292,73 @@ class BoxMapData(Dynamics):
             min_bounds -= self.output_epsilon
             max_bounds += self.output_epsilon
         
+        return np.array([min_bounds, max_bounds])
+    
+    def _handle_empty_box(self, box: np.ndarray) -> np.ndarray:
+        """
+        Handle empty boxes according to the specified strategy.
+        
+        :param box: The empty box
+        :return: Image of the empty box according to strategy
+        """
+        if self.map_empty == 'terminate':
+            raise ValueError(f"Box {box.flatten()} has no data points (empty image)")
+        
+        elif self.map_empty == 'outside':
+            # Map to a box outside the grid domain
+            # Use a box that's clearly outside the domain bounds
+            margin = np.max(self.grid.bounds[1] - self.grid.bounds[0])
+            outside_point = self.grid.bounds[1] + margin
+            return np.array([outside_point, outside_point + 0.1 * margin])
+        
+        elif self.map_empty == 'interpolate':
+            # Try to interpolate from neighboring boxes
+            return self._interpolate_from_neighbors(box)
+        
+        else:
+            raise ValueError(f"Unknown map_empty strategy: {self.map_empty}")
+    
+    def _interpolate_from_neighbors(self, box: np.ndarray) -> np.ndarray:
+        """
+        Interpolate the image of an empty box from neighboring boxes.
+        
+        :param box: The empty box to interpolate
+        :return: Interpolated image box
+        """
+        # Find neighboring boxes that have data
+        box_center = (box[0] + box[1]) / 2
+        grid_coords = np.floor((box_center - self.grid.bounds[0]) / self.grid.box_size).astype(int)
+        
+        # Look for neighbors in expanding radius
+        for radius in range(1, min(self.grid.divisions) // 2):
+            neighbor_images = []
+            
+            # Check all boxes within radius
+            for di in range(-radius, radius + 1):
+                for dj in range(-radius, radius + 1):
+                    if abs(di) == radius or abs(dj) == radius:  # Only check perimeter
+                        neighbor_coords = grid_coords + np.array([di, dj])
+                        
+                        # Check if neighbor is valid
+                        if np.all(neighbor_coords >= 0) and np.all(neighbor_coords < self.grid.divisions):
+                            neighbor_idx = np.ravel_multi_index(neighbor_coords, self.grid.divisions)
+                            
+                            if neighbor_idx in self.box_to_points:
+                                # Get image of this neighbor box
+                                neighbor_box = self.grid.get_boxes()[neighbor_idx]
+                                neighbor_image = self.__call__(neighbor_box)
+                                neighbor_images.append(neighbor_image)
+            
+            if neighbor_images:
+                # Average the neighbor images
+                all_images = np.array(neighbor_images)
+                min_bounds = np.min(all_images[:, 0, :], axis=0)
+                max_bounds = np.max(all_images[:, 1, :], axis=0)
+                return np.array([min_bounds, max_bounds])
+        
+        # If no neighbors found, map to self (identity-like behavior with bloating)
+        min_bounds = box[0] - self.output_epsilon
+        max_bounds = box[1] + self.output_epsilon
         return np.array([min_bounds, max_bounds])
     
     def _get_relevant_box_indices(self, box: np.ndarray) -> np.ndarray:
@@ -251,12 +380,20 @@ class BoxMapData(Dynamics):
 
     def get_active_boxes(self, grid) -> np.ndarray:
         """
-        Return only the boxes that contain data points.
+        Return boxes to be processed during computation.
+        
+        For 'terminate' mode, returns all boxes to detect empty ones.
+        For other modes, returns only boxes that contain data points.
         
         :param grid: The grid (should match self.grid)
-        :return: Array of box indices that contain at least one data point
+        :return: Array of box indices to process
         """
-        return np.array(list(self.box_to_points.keys()), dtype=int)
+        if self.map_empty == 'terminate':
+            # Process all boxes to detect empty ones
+            return np.arange(len(grid.get_boxes()))
+        else:
+            # Only process boxes with data for efficiency
+            return np.array(list(self.box_to_points.keys()), dtype=int)
 
 
 
