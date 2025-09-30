@@ -21,6 +21,18 @@ class Dynamics(ABC):
         """
         pass
 
+    def get_active_boxes(self, grid) -> np.ndarray:
+        """
+        Return the indices of boxes that have meaningful dynamics.
+        
+        By default, all boxes are considered active. Subclasses can override
+        this to filter out boxes where dynamics cannot be computed.
+        
+        :param grid: The grid to check for active boxes
+        :return: Array of active box indices
+        """
+        return np.arange(len(grid.get_boxes()))
+
 class BoxMapFunction(Dynamics):
     """
     A dynamical system defined by an explicit function.
@@ -96,67 +108,164 @@ class BoxMapFunction(Dynamics):
 
 class BoxMapData(Dynamics):
     """
-    A dynamical system defined by data points (X, Y).
+    A data-driven dynamical system optimized for uniform grids.
+    
+    Supports flexible error models:
+    - Input perturbation: B(x, input_epsilon) 
+    - Output perturbation: B(f(x), output_epsilon)
+    - Grid dilation: expand to neighboring boxes
+    
+    This implementation assumes uniform grid spacing and pre-assigns 
+    data points to grid boxes for performance.
     """
-    def __init__(self, X: np.ndarray, Y: np.ndarray, epsilon: float = 1e-6):
+    def __init__(self, X: np.ndarray, Y: np.ndarray, grid, 
+                 input_epsilon: float = 0, output_epsilon: float = 0,
+                 dilation_radius: int = 0):
         """
         :param X: A numpy array of shape (N, D) of input data points.
         :param Y: A numpy array of shape (N, D) of output data points.
-        :param epsilon: The bloating factor to guarantee an outer approximation.
+        :param grid: The UniformGrid instance used for discretization.
+        :param input_epsilon: Input domain uncertainty - expand input boxes by this amount.
+        :param output_epsilon: Output domain uncertainty - bloat output bounding boxes by this amount.
+        :param dilation_radius: Grid dilation radius - include neighboring boxes (0 = no dilation).
         """
-        self.kdtree = cKDTree(X)
+        self.X = X
         self.Y = Y
-        self.epsilon = epsilon
+        self.input_epsilon = input_epsilon
+        self.output_epsilon = output_epsilon
+        self.dilation_radius = dilation_radius
+        self.grid = grid
+        
+        # Pre-assign each data point to its grid box
+        self._assign_points_to_boxes()
+
+    def _assign_points_to_boxes(self):
+        """Pre-compute which data points belong to each grid box."""
+        # Convert points to grid indices
+        point_indices = self._points_to_grid_indices(self.X)
+        
+        # Create mapping from box index to list of data point indices
+        self.box_to_points = {}
+        for i, box_idx in enumerate(point_indices):
+            if box_idx != -1:  # Valid grid box
+                if box_idx not in self.box_to_points:
+                    self.box_to_points[box_idx] = []
+                self.box_to_points[box_idx].append(i)
+    
+    def _points_to_grid_indices(self, points: np.ndarray) -> np.ndarray:
+        """
+        Convert points to flat grid indices.
+        
+        :param points: Array of shape (N, D) with point coordinates
+        :return: Array of shape (N,) with flat grid indices (-1 for points outside grid)
+        """
+        # Check if points are within grid bounds
+        in_bounds = np.all((points >= self.grid.bounds[0]) & 
+                          (points <= self.grid.bounds[1]), axis=1)
+        
+        # Calculate grid coordinates
+        grid_coords = np.floor((points - self.grid.bounds[0]) / self.grid.box_size).astype(int)
+        
+        # Clip to valid range
+        grid_coords = np.clip(grid_coords, 0, self.grid.divisions - 1)
+        
+        # Convert to flat indices
+        flat_indices = np.full(len(points), -1, dtype=int)
+        valid_mask = in_bounds
+        
+        if np.any(valid_mask):
+            flat_indices[valid_mask] = np.ravel_multi_index(
+                grid_coords[valid_mask].T, self.grid.divisions
+            )
+        
+        return flat_indices
 
     def __call__(self, box: np.ndarray) -> np.ndarray:
         """
-        Computes the bounding box of the image of the input box under the data-driven map.
-
-        The image is determined by finding all points in X that lie within the given box,
-        and then taking the corresponding points in Y.
-
+        Computes a bounding box of the image under the data-driven map.
+        
+        Supports
+        1. Input perturbation: expands input box by input_epsilon
+        2. Output perturbation: expands output image by output_epsilon  
+        3. Grid dilation: include n-neighboring boxes in computation
+        
         :param box: A numpy array of shape (2, D) representing the lower and upper
                     bounds of a D-dimensional box.
         :return: A numpy array of shape (2, D) representing the bloated
                  bounding box of the image.
         """
-        # Find indices of points in X that are inside the box
-        # A fast way to get a candidate set is to query for points in a ball that encloses the box
-        center = np.mean(box, axis=0)
-        # Use the diagonal of the box to define the radius of the enclosing ball
-        radius = np.linalg.norm(box[1] - box[0]) / 2.0
-
-        candidate_indices = self.kdtree.query_ball_point(center, r=radius, return_sorted=True)
-
-        if not candidate_indices:
+        # Apply input perturbation if specified
+        if self.input_epsilon > 0:
+            expanded_box = np.array([
+                box[0] - self.input_epsilon,
+                box[1] + self.input_epsilon
+            ])
+        else:
+            expanded_box = box.copy()
+        
+        # Find which grid boxes to consider
+        box_indices = self._get_relevant_box_indices(expanded_box)
+        
+        # Collect all relevant data points
+        all_point_indices = []
+        for box_idx in box_indices:
+            if box_idx in self.box_to_points:
+                all_point_indices.extend(self.box_to_points[box_idx])
+        
+        # Since this method should only be called on active boxes,
+        # we should always have data points. But handle the edge case.
+        if not all_point_indices:
+            # This should not happen for active boxes, but return empty box if it does
             return np.array([[np.inf, np.inf], [-np.inf, -np.inf]])
-
-        # Filter the candidates to get only the points strictly inside the box
-        X_candidates = self.kdtree.data[candidate_indices]
-        in_box_mask = np.all((X_candidates >= box[0]) & (X_candidates <= box[1]), axis=1)
-        image_indices = np.array(candidate_indices)[in_box_mask]
-
-        if image_indices.size == 0:
-            return np.array([[np.inf, np.inf], [-np.inf, -np.inf]])
-
+        
         # Get the corresponding points in Y
-        image_points = self.Y[image_indices]
-
+        image_points = self.Y[all_point_indices]
+        
         # Compute the bounding box of the image points
         min_bounds = np.min(image_points, axis=0)
         max_bounds = np.max(image_points, axis=0)
-
-        # Bloat the bounding box
-        min_bounds -= self.epsilon
-        max_bounds += self.epsilon
-
+        
+        # Apply output perturbation
+        if self.output_epsilon > 0:
+            min_bounds -= self.output_epsilon
+            max_bounds += self.output_epsilon
+        
         return np.array([min_bounds, max_bounds])
+    
+    def _get_relevant_box_indices(self, box: np.ndarray) -> np.ndarray:
+        """
+        Get all box indices relevant for the given box, including dilation.
+        
+        :param box: Input box to find relevant indices for
+        :return: Array of relevant box indices
+        """
+        # Find primary box indices that intersect with the (possibly expanded) input box
+        primary_indices = self.grid.box_to_indices(box)
+        
+        # Apply grid dilation if specified
+        if self.dilation_radius > 0:
+            dilated_indices = self.grid.dilate_indices(primary_indices, self.dilation_radius)
+            return dilated_indices
+        else:
+            return primary_indices
+
+    def get_active_boxes(self, grid) -> np.ndarray:
+        """
+        Return only the boxes that contain data points.
+        
+        :param grid: The grid (should match self.grid)
+        :return: Array of box indices that contain at least one data point
+        """
+        return np.array(list(self.box_to_points.keys()), dtype=int)
+
+
+
 
 class BoxMapODE(Dynamics):
     """
     A dynamical system defined by an ordinary differential equation.
     """
-    def __init__(self, ode_f: Callable[[float, np.ndarray], np.ndarray], tau: float, epsilon: float = 1e-6):
+    def __init__(self, ode_f: Callable[[float, np.ndarray], np.ndarray], tau: float, epsilon: float = 0):
         """
         :param ode_f: The function defining the ODE, f(t, y).
         :param tau: The integration time.

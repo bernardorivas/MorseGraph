@@ -3,21 +3,24 @@ from typing import List, Set, Dict, FrozenSet
 
 def compute_morse_graph(box_map: nx.DiGraph) -> nx.DiGraph:
     """
-    Compute the Morse graph from a BoxMap, including only non-trivial Morse sets.
+    Compute the Morse graph from a BoxMap, properly handling transient states.
 
-    A non-trivial Morse set is one that either:
-    1. Contains more than one node (multi-node SCC)
-    2. Contains a single node with a self-loop
+    The Morse graph shows connectivity between non-trivial Morse sets, where:
+    1. Multi-node SCCs (recurrent components)
+    2. Single-node SCCs with self-loops (fixed points)
+    
+    Connectivity includes paths through transient states (trivial SCCs).
 
     :param box_map: The BoxMap (directed graph), where nodes are box indices.
     :return: A directed graph where each node is a non-trivial Morse set, 
              represented by a frozenset of the box indices it contains.
     """
-    sccs = list(nx.strongly_connected_components(box_map))
+    # Get all strongly connected components
+    all_sccs = list(nx.strongly_connected_components(box_map))
     
-    # Filter to non-trivial SCCs only
+    # Identify non-trivial SCCs (the actual Morse sets)
     non_trivial_sccs = []
-    for scc in sccs:
+    for scc in all_sccs:
         if len(scc) > 1:
             # Multi-node SCC is always non-trivial
             non_trivial_sccs.append(scc)
@@ -31,27 +34,32 @@ def compute_morse_graph(box_map: nx.DiGraph) -> nx.DiGraph:
         # Return empty graph if no non-trivial SCCs found
         return nx.DiGraph()
     
-    # Build the condensation graph manually for non-trivial SCCs only
-    morse_graph = nx.DiGraph()
+    # Build the full condensation graph (includes all SCCs)
+    condensation = nx.condensation(box_map, all_sccs)
     
-    # Convert SCCs to frozensets and add as nodes
+    # Create mapping from SCC to condensation node
+    scc_to_cnode = {}
+    for i, scc in enumerate(all_sccs):
+        scc_to_cnode[frozenset(scc)] = i
+    
+    # Convert non-trivial SCCs to frozensets
     non_trivial_frozensets = [frozenset(scc) for scc in non_trivial_sccs]
+    
+    # Create the Morse graph with non-trivial SCCs as nodes
+    morse_graph = nx.DiGraph()
     morse_graph.add_nodes_from(non_trivial_frozensets)
     
-    # Create a mapping from original nodes to their non-trivial SCC (if any)
-    node_to_scc = {}
-    for scc_frozenset in non_trivial_frozensets:
-        for node in scc_frozenset:
-            node_to_scc[node] = scc_frozenset
-    
-    # Add edges between non-trivial SCCs
-    for u, v in box_map.edges():
-        scc_u = node_to_scc.get(u)
-        scc_v = node_to_scc.get(v)
-        
-        # Only add edge if both nodes are in non-trivial SCCs and SCCs are different
-        if scc_u is not None and scc_v is not None and scc_u != scc_v:
-            morse_graph.add_edge(scc_u, scc_v)
+    # Find connectivity between non-trivial SCCs through the condensation graph
+    for scc1 in non_trivial_frozensets:
+        for scc2 in non_trivial_frozensets:
+            if scc1 != scc2:
+                # Get corresponding condensation nodes
+                cnode1 = scc_to_cnode[scc1]
+                cnode2 = scc_to_cnode[scc2]
+                
+                # Check if there's a path in the condensation graph
+                if nx.has_path(condensation, cnode1, cnode2):
+                    morse_graph.add_edge(scc1, scc2)
 
     return morse_graph
 

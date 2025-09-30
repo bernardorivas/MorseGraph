@@ -13,6 +13,9 @@ fixed points and a saddle point.
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import networkx as nx
+from scipy.integrate import solve_ivp
 import os
 
 # Import the necessary components from the MorseGraph library
@@ -20,7 +23,7 @@ from MorseGraph.grids import UniformGrid
 from MorseGraph.dynamics import BoxMapODE
 from MorseGraph.core import Model
 from MorseGraph.analysis import compute_morse_graph
-from MorseGraph.plot import plot_morse_sets
+from MorseGraph.plot import plot_morse_sets, plot_morse_graph
 
 # Set up output directory for figures
 output_dir = os.path.dirname(os.path.abspath(__file__))
@@ -28,7 +31,7 @@ figures_dir = output_dir
 
 def bistable_ode(t, x):
     """
-    A simple bistable ODE system.
+    A simple ODE system.
     dx/dt = x - x^3
     dy/dt = -y
     
@@ -40,14 +43,14 @@ def bistable_ode(t, x):
     dydt = -x[1]
     return np.array([dxdt, dydt])
 
-def main():
+def main(show_phase_portrait=False):
     print("MorseGraph Example 3: ODE-Based Dynamics")
     print("=======================================")
     
-    # 1. Define and Visualize the ODE System
-    print("\n1. Defining the bistable ODE system...")
+    # 1. Define the ODE System and optionally visualize
+    print("\n1. Defining the ODE system...")
     
-    # Create vector field for visualization
+    # Create vector field for visualization (always compute for overlay)
     x_vec = np.linspace(-2, 2, 20)
     y_vec = np.linspace(-2, 2, 20)
     x, y = np.meshgrid(x_vec, y_vec)
@@ -61,34 +64,75 @@ def main():
             u[i,j] = derivatives[0]
             v[i,j] = derivatives[1]
     
-    # Plot vector field
-    plt.figure(figsize=(8, 8))
-    plt.quiver(x, y, u, v, color='blue', alpha=0.7)
-    plt.title("Vector Field of the Bistable ODE")
-    plt.xlabel("x")
-    plt.ylabel("y")
-    plt.grid(True, alpha=0.3)
-    
-    # Mark fixed points
-    plt.plot([-1, 0, 1], [0, 0, 0], 'ro', markersize=8, label='Fixed Points')
-    plt.legend()
-    
-    # Save vector field plot
-    vector_field_path = os.path.join(figures_dir, "bistable_vector_field.png")
-    plt.savefig(vector_field_path, dpi=150, bbox_inches='tight')
-    print(f"Saved vector field plot to: {vector_field_path}")
-    plt.show()
+    # Normalize vector field for better visualization
+    magnitude = np.sqrt(u**2 + v**2)
+    magnitude = np.where(magnitude == 0, 1, magnitude)
+    u_norm = u / magnitude
+    v_norm = v / magnitude
+
+    if show_phase_portrait:
+        # Plot vector field with sample trajectories
+        plt.figure(figsize=(10, 8))
+        plt.quiver(x, y, u_norm, v_norm, color='blue', alpha=0.5, scale=40, width=0.002)
+        
+        
+        # Generate 5 random initial conditions
+        np.random.seed(42)  # For reproducible results
+        initial_conditions = np.random.uniform(low=[-1.8, -1.8], high=[1.8, 1.8], size=(5, 2))
+        
+        # Integrate and plot trajectories
+        t_span = (0, 3.0)  # Integration time
+        t_eval = np.linspace(0, 3.0, 300)
+        
+        colors = ['red', 'green', 'orange', 'purple', 'brown']
+        
+        for i, initial_point in enumerate(initial_conditions):
+            sol = solve_ivp(bistable_ode, t_span, initial_point, t_eval=t_eval, dense_output=True)
+            
+            if sol.success:
+                trajectory = sol.y.T  # Shape: (n_times, 2)
+                plt.plot(trajectory[:, 0], trajectory[:, 1], 
+                        color=colors[i], linewidth=2, alpha=0.8, 
+                        label=f'Trajectory {i+1}')
+                
+                # Mark initial point
+                plt.plot(initial_point[0], initial_point[1], 
+                        'o', color=colors[i], markersize=8, markeredgecolor='black')
+                
+                # Mark final point
+                plt.plot(trajectory[-1, 0], trajectory[-1, 1], 
+                        's', color=colors[i], markersize=6, markeredgecolor='black')
+        
+        plt.title("Bistable ODE: Vector Field and Sample Trajectories")
+        plt.xlabel("x")
+        plt.ylabel("y")
+        plt.grid(True, alpha=0.3)
+        
+        # Mark fixed points
+        plt.plot([-1, 0, 1], [0, 0, 0], 'ko', markersize=10, 
+                 markerfacecolor='white', markeredgewidth=2, label='Fixed Points')
+        
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.xlim(-2, 2)
+        plt.ylim(-2, 2)
+        
+        # Save plot
+        trajectory_plot_path = os.path.join(figures_dir, "bistable_trajectories.png")
+        plt.savefig(trajectory_plot_path, dpi=150, bbox_inches='tight')
+        print(f"Saved trajectory plot to: {trajectory_plot_path}")
+        plt.show()
     
     # 2. Set up the Morse Graph Computation
     print("\n2. Setting up Morse graph computation...")
     
     # Define the grid parameters
-    divisions = np.array([24, 24])  # Reasonable resolution
+    grid_x, grid_y = 7, 7
+    divisions = np.array([int(2**grid_x-1), int(2**grid_y-1)], dtype=int)
     domain = np.array([[-2.0, -2.0], [2.0, 2.0]])
     
     # Create the dynamics object for our ODE
-    # tau=0.5 is the integration time - should capture movement between regions
-    dynamics = BoxMapODE(bistable_ode, tau=0.5, epsilon=0.1)
+    tau = 2.0
+    dynamics = BoxMapODE(bistable_ode,tau)
     
     # Create the grid
     grid = UniformGrid(bounds=domain, divisions=divisions)
@@ -96,8 +140,8 @@ def main():
     # Create the model
     model = Model(grid, dynamics)
     
-    print(f"Created grid with {len(grid.get_boxes())} boxes")
-    print(f"Integration time tau = 0.5")
+    print(f"Created grid with {divisions[0]}x{divisions[1]} boxes")
+    print(f"Integration time tau: {tau}")
     print(f"Domain: {domain}")
     
     # 3. Compute the BoxMap
@@ -122,26 +166,36 @@ def main():
     # 5. Visualize the Results
     print("\n5. Creating visualizations...")
     
-    # Plot the Morse sets on the grid with vector field overlay
-    fig, ax = plt.subplots(figsize=(10, 8))
-    plot_morse_sets(grid, morse_graph, ax=ax)
+    # First plot: Morse sets on the grid
+    fig, ax1 = plt.subplots(1, 1, figsize=(8, 7))
+    morse_sets = list(morse_graph.nodes())
+    plot_morse_sets(grid, morse_graph, ax=ax1)
     
-    # Overlay the vector field for context
-    ax.quiver(x, y, u, v, color='blue', alpha=0.3, scale=50, width=0.002)
+    # Extract colors for consistency
+    morse_set_colors = {}
+    num_sets = len(morse_sets)
+    if num_sets > 0:
+        cmap = cm.get_cmap('tab10')
+        for i, morse_set in enumerate(morse_sets):
+            color = cmap(i / max(num_sets, 10))
+            morse_set_colors[morse_set] = color
+    ax1.set_title("Morse Sets (Spatial)")
+    ax1.set_xlabel("x")
+    ax1.set_ylabel("y")
+    ax1.grid(True, alpha=0.3)
     
-    # Mark fixed points
-    ax.plot([-1, 0, 1], [0, 0, 0], 'ko', markersize=8, label='Fixed Points')
+    spatial_plot_path = os.path.join(figures_dir, "bistable_morse_sets.png")
+    plt.savefig(spatial_plot_path, dpi=150, bbox_inches='tight')
+    print(f"Saved Morse sets plot to: {spatial_plot_path}")
+    plt.show()
     
-    ax.set_title("Morse Sets for Bistable ODE System")
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    # Second plot: Morse graph with hierarchical layout
+    fig, ax2 = plt.subplots(1, 1, figsize=(8, 7))
+    plot_morse_graph(morse_graph, ax=ax2, morse_sets_colors=morse_set_colors)
     
-    # Save the Morse sets plot
-    morse_plot_path = os.path.join(figures_dir, "bistable_morse_sets.png")
-    plt.savefig(morse_plot_path, dpi=150, bbox_inches='tight')
-    print(f"Saved Morse sets plot to: {morse_plot_path}")
+    graph_plot_path = os.path.join(figures_dir, "bistable_morse_graph.png")
+    plt.savefig(graph_plot_path, dpi=150, bbox_inches='tight')
+    print(f"Saved Morse graph to: {graph_plot_path}")
     plt.show()
     
     # 6. Analysis

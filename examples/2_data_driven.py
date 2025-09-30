@@ -2,9 +2,9 @@
 """
 MorseGraph Example 2: Data-Driven Dynamics
 
-This script demonstrates how to compute a Morse graph from a dataset of input-output 
+This script shows how to compute a Morse graph from a dataset of input-output 
 pairs (X, Y). This is useful when the dynamics are not known from a function or ODE, 
-but are given by data (e.g., from a simulation or experiment).
+but you are given data (e.g., from a simulation or experiment).
 
 We use the BoxMapData dynamics class. For this example, we first generate a dataset 
 (X, Y) from a known map (the Henon map) so we can see how the data-driven approach works.
@@ -39,8 +39,8 @@ def main():
     print("\n1. Generating sample data...")
     
     # Define the domain and number of sample points
-    lower_bounds = np.array([-1.5, -0.4])
-    upper_bounds = np.array([1.5, 0.4])
+    lower_bounds = np.array([-2.5, -0.5])
+    upper_bounds = np.array([2.5, 0.5])
     num_points = 5000
     
     # Generate random points X and their images Y
@@ -71,14 +71,15 @@ def main():
     print("\n2. Setting up Morse graph computation...")
     
     # Define the grid parameters
-    divisions = np.array([32, 32])  # Smaller grid for faster computation
-    domain = np.array([[-1.5, -0.4], [1.5, 0.4]])
-    
-    # Create the dynamics object from our data
-    dynamics = BoxMapData(X, Y, epsilon=0.1)
+    grid_x, grid_y = 8, 8
+    divisions = np.array([int(2**int(grid_x)), int(2**int(grid_y))], dtype=int)
+    domain = np.array([[-2.5, -0.5], [2.5, 0.5]])
     
     # Create the grid
     grid = UniformGrid(bounds=domain, divisions=divisions)
+    
+    # Create the dynamics object from our data with epsilon perturbations
+    dynamics = BoxMapData(X, Y, grid, dilation_radius=2)
     
     # Create the model which connects the grid and dynamics
     model = Model(grid, dynamics)
