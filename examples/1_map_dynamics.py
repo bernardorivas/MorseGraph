@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-MorseGraph Example 1: Map Dynamics
+MorseGraph Example 1: Maps
 
-This script demonstrates how to use MorseGraph with a simple 2D map, the Hénon map.
+This script shows how to compute a Morse Graph for a discrete map.
+
+The BoxMapFunction class uses epsilon-bloating on interval arithmetic
+to define a rigorous outer approximation of the map's action on boxes.
+
+As an example, we analyze the Hénon map, a classic chaotic
+two-dimensional discrete dynamical system.
 """
 
 import numpy as np
@@ -13,15 +19,15 @@ import os
 from MorseGraph.grids import UniformGrid
 from MorseGraph.dynamics import BoxMapFunction
 from MorseGraph.core import Model
-from MorseGraph.analysis import compute_morse_graph
-from MorseGraph.plot import plot_morse_sets
+from MorseGraph.analysis import compute_morse_graph, compute_all_morse_set_basins
+from MorseGraph.plot import plot_morse_sets, plot_morse_graph, plot_basins_of_attraction
 
 # Set up output directory for figures
 output_dir = os.path.dirname(os.path.abspath(__file__))
-figures_dir = output_dir
+figures_dir = os.path.join(output_dir, "figures")
 
 def henon_map(x, a=1.4, b=0.3):
-    """Standard Henon map, vectorized."""
+    """Standard henon map"""
     x_next = 1 - a * x[0]**2 + x[1]
     y_next = b * x[0]
     return np.array([x_next, y_next])
@@ -62,37 +68,41 @@ def main():
     # Print details of Morse sets
     for i, morse_set in enumerate(morse_graph.nodes()):
         print(f"  Morse set {i+1}: {len(morse_set)} boxes")
+
+    # 3. Compute basins of attraction for all Morse sets
+    print("\n3. Computing basins of attraction for all Morse sets...")
+    basins = compute_all_morse_set_basins(morse_graph, box_map)
+
+    # 4. Visualize the Results
+    print("\n4. Creating visualizations...")
     
-    # 3. Visualize the Results
-    print("\n3. Creating visualizations...")
-    
-    # Plot the Morse sets on the grid
+    # Plot and save the Morse sets figure
     fig, ax = plt.subplots(figsize=(10, 6))
     plot_morse_sets(grid, morse_graph, ax=ax)
-    ax.set_title("Morse Sets for the Hénon Map")
+    ax.set_title("Morse Sets")
     ax.set_xlabel("x")
     ax.set_ylabel("y")
-    
-    # Save the figure
-    figure_path = os.path.join(figures_dir, "henon_morse_sets.png")
+    figure_path = os.path.join(figures_dir, "1_henon_morse_sets.png")
     plt.savefig(figure_path, dpi=150, bbox_inches='tight')
     print(f"Saved Morse sets plot to: {figure_path}")
     
-    # Show the plot
-    plt.show()
-    
-    # Additional analysis
-    print("\n4. Additional Analysis:")
-    
-    # Count attractors (nodes with no outgoing edges)
-    attractors = [node for node in morse_graph.nodes() if morse_graph.out_degree(node) == 0]
-    print(f"Number of attractors: {len(attractors)}")
-    
-    # Count sources (nodes with no incoming edges)  
-    sources = [node for node in morse_graph.nodes() if morse_graph.in_degree(node) == 0]
-    print(f"Number of sources: {len(sources)}")
-    
-    print("\nExample completed successfully!")
+    # Plot and save the Morse Graph
+    fig, ax = plt.subplots(figsize=(8, 6))
+    plot_morse_graph(morse_graph, ax=ax)
+    ax.set_title("Morse Graph")
+    graph_figure_path = os.path.join(figures_dir, "1_henon_morse_graph.png")
+    plt.savefig(graph_figure_path, dpi=150, bbox_inches='tight')
+    print(f"Saved Morse graph plot to: {graph_figure_path}")
+
+    # Plot and save the Basins of Attraction
+    fig, ax = plt.subplots(figsize=(10, 6))
+    plot_basins_of_attraction(grid, basins, morse_graph=morse_graph, ax=ax, show_outside=True)
+    ax.set_title("Basins of Attraction")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    basins_plot_path = os.path.join(figures_dir, "1_henon_basins.png")
+    plt.savefig(basins_plot_path, dpi=150, bbox_inches='tight')
+    print(f"Saved basins of attraction plot to: {basins_plot_path}")
 
 if __name__ == "__main__":
     main()

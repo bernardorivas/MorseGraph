@@ -2,13 +2,13 @@
 """
 MorseGraph Example 5: Learned Dynamics
 
-This script demonstrates a machine learning workflow that:
-1. Generates training data from the Henon map dynamical system
-2. Trains neural network models (encoder, decoder, and latent dynamics)
-3. Uses learned dynamics to compute Morse graphs via LearnedMapDynamics
-4. Visualizes the results comparing learned vs original system behavior
+This script shows how to compute a Morse Graph from learned neural network models.
 
-This example showcases the full ML pipeline for dynamics learning in latent space.
+The LearnedMapDynamics class uses PyTorch models (encoder, decoder, latent map)
+to define dynamics in a learned latent space.
+
+As an example, we train models on Hénon map data and analyze
+the learned representation, showcasing the full ML pipeline.
 """
 
 import numpy as np
@@ -99,10 +99,9 @@ def main():
     plt.grid(True, alpha=0.3)
     
     # Save training data plot
-    data_plot_path = os.path.join(figures_dir, "learned_dynamics_data.png")
+    data_plot_path = os.path.join(figures_dir, "5_learned_dynamics_data.png")
     plt.savefig(data_plot_path, dpi=150, bbox_inches='tight')
     print(f"Saved training data plot to: {data_plot_path}")
-    plt.show()
     
     # 2. Prepare Data for Training
     print("\n2. Preparing data for neural network training...")
@@ -213,10 +212,9 @@ def main():
     plt.tight_layout()
     
     # Save results plot
-    results_plot_path = os.path.join(figures_dir, "learned_dynamics_results.png")
+    results_plot_path = os.path.join(figures_dir, "5_learned_dynamics_results.png")
     plt.savefig(results_plot_path, dpi=150, bbox_inches='tight')
     print(f"Saved results plot to: {results_plot_path}")
-    plt.show()
     
     # 7. Model Evaluation
     print("\n7. Evaluating learned model...")
@@ -253,10 +251,10 @@ def main():
     print(f"Sources discovered: {len(sources)}")
     print(f"Total Morse sets: {len(morse_graph.nodes())}")
     
-    print(f"\nThe learned dynamics successfully captured the essential")
-    print(f"structure of the Henon map and enabled Morse graph computation!")
+    print(f"\nThe learned dynamics captured the essential")
+    print(f"structure of the Henon map for Morse graph computation.")
     
-    print("\nExample completed successfully!")
+    print("\nExample completed.")
 
 if __name__ == "__main__":
     main()

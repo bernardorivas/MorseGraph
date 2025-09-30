@@ -15,8 +15,8 @@ def test_box_map_data():
     divisions = np.array([2, 2])
     grid = UniformGrid(bounds, divisions)
 
-    # Create a BoxMapData object with small output_epsilon to handle point data
-    dynamics = BoxMapData(X, Y, grid, output_epsilon=0.01)
+    # Create a BoxMapData object with default epsilons (better connectivity)
+    dynamics = BoxMapData(X, Y, grid)
 
     # Create a model
     model = Model(grid, dynamics)
@@ -24,14 +24,15 @@ def test_box_map_data():
     # Compute the map graph
     map_graph = model.compute_box_map()
 
-    # There should be 2 nodes (only active boxes) and 2 edges
+    # There should be 2 nodes (only active boxes) and 4 edges (with new default epsilon)
     assert map_graph.number_of_nodes() == 2
-    assert map_graph.number_of_edges() == 2
+    assert map_graph.number_of_edges() == 4
 
-    # Check the edges
-    # Box 0 contains (0.25, 0.25), so its image is (0.3, 0.3) which is in box 0
-    # Box 3 contains (0.75, 0.75), so its image is (0.7, 0.7) which is in box 3
+    # Check the edges - with default epsilon, we get cross-connections too
+    # Box 0 maps to itself and box 3, box 3 maps to itself and box 0
     assert map_graph.has_edge(0, 0)
+    assert map_graph.has_edge(0, 3)
+    assert map_graph.has_edge(3, 0)
     assert map_graph.has_edge(3, 3)
 
 def test_box_map_ode():
