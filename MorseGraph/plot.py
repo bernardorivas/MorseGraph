@@ -1,39 +1,32 @@
-import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Rectangle
 from typing import Dict, Set, FrozenSet
 
 from .grids import AbstractGrid
 
-def plot_morse_sets(grid: AbstractGrid, morse_graph_or_sets, ax: plt.Axes = None, **kwargs):
+def plot_morse_sets(grid: AbstractGrid, morse_graph: nx.DiGraph, ax: plt.Axes = None, **kwargs):
     """
     Plots the Morse sets on a grid.
 
     :param grid: The grid object used for the computation.
-    :param morse_graph_or_sets: Either a networkx DiGraph (morse graph) or a set of frozensets containing box indices
+    :param morse_graph: The Morse graph (NetworkX DiGraph) containing the Morse sets as nodes.
     :param ax: The matplotlib axes to plot on. If None, a new figure and axes are created.
     :param kwargs: Additional keyword arguments to pass to the PatchCollection.
     """
     if ax is None:
-        fig, ax = plt.subplots()
+        _, ax = plt.subplots()
 
-    # Handle both morse graph (nx.DiGraph) and set of frozensets
-    if hasattr(morse_graph_or_sets, 'nodes'):
-        # It's a networkx graph
-        morse_sets = morse_graph_or_sets.nodes()
-    else:
-        # It's already a set of frozensets
-        morse_sets = morse_graph_or_sets
+    # Extract morse sets from the NetworkX graph
+    morse_sets = morse_graph.nodes()
 
     # Get all boxes from the grid
     all_boxes = grid.get_boxes()
     
     rects = []
     colors = []
-    import matplotlib.cm as cm
-    import matplotlib.colors as mcolors
     
     # Create a colormap for different Morse sets
     num_sets = len(morse_sets)
@@ -69,11 +62,11 @@ def plot_basins_of_attraction(grid: AbstractGrid, basins: Dict[FrozenSet[int], S
     :param kwargs: Additional keyword arguments to pass to the PatchCollection.
     """
     if ax is None:
-        fig, ax = plt.subplots()
+        _, ax = plt.subplots()
 
     colors = plt.cm.get_cmap('viridis', len(basins))
     
-    for i, (attractor, basin) in enumerate(basins.items()):
+    for i, (_, basin) in enumerate(basins.items()):
         rects = []
         for box_index in basin:
             box = grid.get_boxes([box_index])[0]
@@ -88,20 +81,53 @@ def plot_basins_of_attraction(grid: AbstractGrid, basins: Dict[FrozenSet[int], S
     ax.set_aspect('equal', adjustable='box')
     plt.show()
 
-def plot_morse_graph(morse_graph: nx.DiGraph, ax: plt.Axes = None, **kwargs):
+def plot_morse_graph(morse_graph: nx.DiGraph, ax: plt.Axes = None, 
+                    morse_sets_colors: dict = None, node_size: int = 300,
+                    arrowsize: int = 20, font_size: int = 8):
     """
-    Plots the Morse graph.
+    Plots the Morse graph with hierarchical layout.
 
     :param morse_graph: The Morse graph to plot.
     :param ax: The matplotlib axes to plot on. If None, a new figure and axes are created.
-    :param kwargs: Additional keyword arguments to pass to networkx.draw.
+    :param morse_sets_colors: Optional dict mapping morse sets to colors for coordination with plot_morse_sets.
+    :param node_size: Size of the nodes.
+    :param arrowsize: Size of the arrow heads.
+    :param font_size: Font size for node labels.
     """
     if ax is None:
-        fig, ax = plt.subplots()
+        _, ax = plt.subplots()
 
-    # Create a mapping from frozenset to a shorter string representation
-    node_labels = {node: str(i) for i, node in enumerate(morse_graph.nodes())}
+    morse_sets = list(morse_graph.nodes())
     
-    pos = nx.spring_layout(morse_graph)
-    nx.draw(morse_graph, pos, ax=ax, labels=node_labels, **kwargs)
-    plt.show()
+    # Generate colors if not provided
+    if morse_sets_colors is None:
+        morse_sets_colors = {}
+        num_sets = len(morse_sets)
+        if num_sets > 0:
+            cmap = cm.get_cmap('tab10')
+            for i, morse_set in enumerate(morse_sets):
+                color = cmap(i / max(num_sets, 10))
+                morse_sets_colors[morse_set] = color
+    
+    # Create node colors list in the same order as morse_sets
+    node_colors = [morse_sets_colors.get(morse_set, 'lightblue') for morse_set in morse_sets]
+    
+    # Create a mapping from frozenset to a shorter string representation
+    node_labels = {node: str(i+1) for i, node in enumerate(morse_sets)}
+    
+    # Try hierarchical layout, fallback to spring layout
+    try:
+        from networkx.drawing.nx_agraph import pygraphviz_layout
+        pos = pygraphviz_layout(morse_graph, prog='dot')
+    except (ImportError, Exception):
+        pos = nx.spring_layout(morse_graph, seed=42)
+    
+    # Draw the graph components
+    nx.draw_networkx_nodes(morse_graph, pos, node_color=node_colors,
+                          node_size=node_size, ax=ax, alpha=0.8)
+    nx.draw_networkx_edges(morse_graph, pos, edge_color='gray',
+                          arrows=True, arrowsize=arrowsize, ax=ax, alpha=0.6)
+    nx.draw_networkx_labels(morse_graph, pos, labels=node_labels,
+                           font_size=font_size, ax=ax)
+    
+    ax.set_title("Morse Graph")

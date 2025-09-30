@@ -23,9 +23,9 @@ class Model:
         """
         Compute the BoxMap, which represents the discrete dynamical system on grid boxes.
 
-        This method iterates over all boxes in the grid, computes the image of
-        each box under the dynamics, and finds which other grid boxes intersect
-        with this image. The result is a directed graph representing the BoxMap
+        This method iterates over active boxes in the grid (those with meaningful dynamics),
+        computes the image of each box under the dynamics, and finds which other grid boxes 
+        intersect with this image. The result is a directed graph representing the BoxMap
         where edges indicate possible transitions between boxes.
 
         :param n_jobs: The number of jobs to run in parallel. -1 means using all
@@ -34,7 +34,7 @@ class Model:
                  indices and edges represent possible transitions.
         """
         boxes = self.grid.get_boxes()
-        num_boxes = len(boxes)
+        active_box_indices = self.dynamics.get_active_boxes(self.grid)
 
         def compute_adjacencies(i):
             image_box = self.dynamics(boxes[i])
@@ -42,14 +42,17 @@ class Model:
             return i, adj
 
         results = Parallel(n_jobs=n_jobs)(
-            delayed(compute_adjacencies)(i) for i in range(num_boxes)
+            delayed(compute_adjacencies)(i) for i in active_box_indices
         )
 
         graph = nx.DiGraph()
-        graph.add_nodes_from(range(num_boxes))
+        # Only add active boxes as nodes
+        graph.add_nodes_from(active_box_indices)
 
         for i, adj in results:
             for j in adj:
-                graph.add_edge(i, j)
+                # Only add edges to active boxes (j might be inactive)
+                if j in active_box_indices:
+                    graph.add_edge(i, j)
 
         return graph

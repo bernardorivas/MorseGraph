@@ -15,17 +15,17 @@ def test_box_map_data():
     divisions = np.array([2, 2])
     grid = UniformGrid(bounds, divisions)
 
-    # Create a BoxMapData object
-    dynamics = BoxMapData(X, Y)
+    # Create a BoxMapData object with small output_epsilon to handle point data
+    dynamics = BoxMapData(X, Y, grid, output_epsilon=0.01)
 
     # Create a model
     model = Model(grid, dynamics)
 
     # Compute the map graph
-    map_graph = model.compute_map_graph()
+    map_graph = model.compute_box_map()
 
-    # There should be 4 nodes and 2 edges
-    assert map_graph.number_of_nodes() == 4
+    # There should be 2 nodes (only active boxes) and 2 edges
+    assert map_graph.number_of_nodes() == 2
     assert map_graph.number_of_edges() == 2
 
     # Check the edges
@@ -51,13 +51,15 @@ def test_box_map_ode():
     model = Model(grid, dynamics)
 
     # Compute the map graph
-    map_graph = model.compute_map_graph()
+    map_graph = model.compute_box_map()
 
-    # Check that boxes on the left map to boxes on the right
-    # Box 0 ([0, 0.5] x [0, 0.5]) should map to a box that intersects box 1 ([0.5, 1] x [0, 0.5])
-    assert map_graph.has_edge(0, 1)
-    # Box 2 ([0, 0.5] x [0.5, 1]) should map to a box that intersects box 3 ([0.5, 1] x [0.5, 1])
-    assert map_graph.has_edge(2, 3)
+    # Check expected transitions for rightward motion
+    # Box 0 ([0, 0.5] x [0, 0.5]) maps to boxes 0 and 2 (moves right and overlaps both)
+    assert map_graph.has_edge(0, 0)
+    assert map_graph.has_edge(0, 2)
+    # Box 1 ([0, 0.5] x [0.5, 1]) maps to boxes 1 and 3 (moves right and overlaps both)
+    assert map_graph.has_edge(1, 1)
+    assert map_graph.has_edge(1, 3)
 
 def test_basins_of_attraction():
     # Create a simple map graph
