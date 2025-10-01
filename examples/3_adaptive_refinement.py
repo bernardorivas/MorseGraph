@@ -79,8 +79,9 @@ def main():
     # The function will print its progress
     final_morse_graph, refinement_history = iterative_morse_computation(
         model=model,
-        max_depth=5,  
-        refinement_threshold=0.05
+        max_depth=5,
+        refinement_threshold=0.05,
+        neighborhood_radius=1
     )
     
     print(f"\nFinal grid: {len(model.grid.get_boxes())} boxes")

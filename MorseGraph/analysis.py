@@ -187,42 +187,31 @@ def compute_basins_of_attraction(morse_graph: nx.DiGraph, box_map: nx.DiGraph) -
     return basins
 
 
-def _update_box_map(box_map: nx.DiGraph, model, boxes_to_refine: List[int], new_children_map: Dict[int, List[int]]):
+def _update_box_map(box_map: nx.DiGraph, model, boxes_to_refine: List[int], new_children_map: Dict[int, List[int]], nodes_to_recompute: Set[int]):
     """
-    Locally update the BoxMap after grid refinement.
+    Update the BoxMap after grid refinement by re-computing a specified set of nodes.
 
     :param box_map: The existing BoxMap graph.
     :param model: The dynamics model.
     :param boxes_to_refine: List of box indices that were subdivided.
     :param new_children_map: Mapping from a subdivided box to its new children.
+    :param nodes_to_recompute: The set of all nodes whose outgoing edges must be recomputed.
     """
-    # 1. Find predecessors of refined boxes before they are removed
-    predecessors_to_recompute = set()
+    # 1. Remove outgoing edges from all nodes that will be recomputed
+    for node in nodes_to_recompute:
+        if box_map.has_node(node):
+            box_map.remove_edges_from(list(box_map.out_edges(node)))
+
+    # 2. Remove the refined boxes from the graph
     for box in boxes_to_refine:
-        if box in box_map:
-            for pred in box_map.predecessors(box):
-                predecessors_to_recompute.add(pred)
-
-    # Exclude predecessors that were also refined
-    predecessors_to_recompute.difference_update(boxes_to_refine)
-
-    # 2. Remove outgoing edges from predecessors
-    for pred in predecessors_to_recompute:
-        if pred in box_map:
-            box_map.remove_edges_from(list(box_map.out_edges(pred)))
-
-    # 3. Remove the refined boxes from the graph
-    for box in boxes_to_refine:
-        if box in box_map:
+        if box_map.has_node(box):
             box_map.remove_node(box)
 
-    # 4. Get all new children and add them to the graph
-    all_new_children = [child for children in new_children_map.values() for child in children]
+    # 3. Get all new children and add them to the graph
+    all_new_children = {child for children in new_children_map.values() for child in children}
     box_map.add_nodes_from(all_new_children)
-
-    # 5. Recompute images for new children and predecessors
-    nodes_to_recompute = set(all_new_children).union(predecessors_to_recompute)
     
+    # 4. Recompute images for the specified nodes
     if not nodes_to_recompute:
         return box_map
 
@@ -234,7 +223,6 @@ def _update_box_map(box_map: nx.DiGraph, model, boxes_to_refine: List[int], new_
         return box_map
 
     node_indices = sorted(list(valid_nodes_to_recompute))
-    
     boxes_to_process = model.grid.get_boxes_by_index(node_indices)
 
     for i, box_idx in enumerate(node_indices):
@@ -247,7 +235,7 @@ def _update_box_map(box_map: nx.DiGraph, model, boxes_to_refine: List[int], new_
     return box_map
 
 
-def iterative_morse_computation(model, max_depth: int = 5, refinement_threshold: float = 0.1):
+def iterative_morse_computation(model, max_depth: int = 5, refinement_threshold: float = 0.1, neighborhood_radius: int = 1):
     """
     Iteratively compute Morse graphs with adaptive grid refinement.
     
@@ -257,6 +245,7 @@ def iterative_morse_computation(model, max_depth: int = 5, refinement_threshold:
     :param model: Model instance with dynamics and an adaptive grid
     :param max_depth: Maximum number of refinement iterations
     :param refinement_threshold: Threshold for determining which Morse sets to refine
+    :param neighborhood_radius: Radius for neighborhood re-computation (k=0 for old behavior, k>=1 for more robust updates)
     :return: Final Morse graph and refinement history
     """
     # Import here to avoid circular imports
@@ -296,21 +285,40 @@ def iterative_morse_computation(model, max_depth: int = 5, refinement_threshold:
         print(f"  Boxes to refine: {iteration_info['num_boxes_to_refine']}")
         
         # Step 4: Check termination conditions
-        if len(boxes_to_refine) == 0:
+        if not boxes_to_refine:
             print("  No further refinement needed - terminating.")
             break
         
         if iteration == max_depth - 1:
             print("  Maximum depth reached - terminating refinement")
             break
+
+        # Step 5: Identify the full set of nodes to recompute *before* subdividing
+        # This includes new children, and predecessors of the neighborhood
         
-        # Step 5: Subdivide the grid locally
+        # Define the neighborhood around the boxes to be refined
+        neighborhood = model.grid.dilate_indices(np.array(boxes_to_refine), radius=neighborhood_radius)
+        
+        # Find all predecessors of this neighborhood
+        predecessors_to_recompute = set()
+        for box_idx in neighborhood:
+            if box_map.has_node(box_idx):
+                predecessors_to_recompute.update(box_map.predecessors(box_idx))
+
+        # We must recompute these predecessors
+        nodes_to_recompute = predecessors_to_recompute.difference(boxes_to_refine)
+
+        # Step 6: Subdivide the grid locally
         print(f"  Subdividing {len(boxes_to_refine)} boxes...")
         new_children_map = model.grid.subdivide(boxes_to_refine)
         
-        # Step 6: Update BoxMap locally
-        print("  Updating BoxMap locally...")
-        box_map = _update_box_map(box_map, model, boxes_to_refine, new_children_map)
+        # Add the new children to the set of nodes to recompute
+        all_new_children = {child for children in new_children_map.values() for child in children}
+        nodes_to_recompute.update(all_new_children)
+
+        # Step 7: Update BoxMap
+        print(f"  Updating BoxMap for {len(nodes_to_recompute)} nodes...")
+        box_map = _update_box_map(box_map, model, boxes_to_refine, new_children_map, nodes_to_recompute)
         print(f"  Updated BoxMap has {box_map.number_of_nodes()} nodes and {box_map.number_of_edges()} edges.")
 
     # Return final results
