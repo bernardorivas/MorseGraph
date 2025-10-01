@@ -235,7 +235,14 @@ def _update_box_map(box_map: nx.DiGraph, model, boxes_to_refine: List[int], new_
     return box_map
 
 
-def iterative_morse_computation(model, max_depth: int = 5, refinement_threshold: float = 0.1, neighborhood_radius: int = 1):
+def iterative_morse_computation(
+    model,
+    max_depth: int = 5,
+    refinement_threshold: float = 0.1,
+    neighborhood_radius: int = 1,
+    criterion: str = 'volume',
+    criterion_kwargs: dict = None
+):
     """
     Iteratively compute Morse graphs with adaptive grid refinement.
     
@@ -244,8 +251,10 @@ def iterative_morse_computation(model, max_depth: int = 5, refinement_threshold:
     
     :param model: Model instance with dynamics and an adaptive grid
     :param max_depth: Maximum number of refinement iterations
-    :param refinement_threshold: Threshold for determining which Morse sets to refine
+    :param refinement_threshold: Threshold for determining which Morse sets to refine (volume criterion)
     :param neighborhood_radius: Radius for neighborhood re-computation (k=0 for old behavior, k>=1 for more robust updates)
+    :param criterion: Refinement criterion to use ('volume' or 'diameter')
+    :param criterion_kwargs: Additional keyword arguments for the criterion functions
     :return: Final Morse graph and refinement history
     """
     # Import here to avoid circular imports
@@ -253,6 +262,9 @@ def iterative_morse_computation(model, max_depth: int = 5, refinement_threshold:
     
     if not isinstance(model.grid, AdaptiveGrid):
         raise ValueError("iterative_morse_computation requires an AdaptiveGrid")
+    
+    if criterion_kwargs is None:
+        criterion_kwargs = {}
     
     refinement_history = []
 
@@ -267,8 +279,15 @@ def iterative_morse_computation(model, max_depth: int = 5, refinement_threshold:
         # Step 2: Compute Morse graph
         morse_graph = compute_morse_graph(box_map)
         
-        # Step 3: Identify boxes to refine
-        boxes_to_refine = _identify_boxes_to_refine(morse_graph, model.grid, refinement_threshold)
+        # Step 3: Identify boxes to refine using the specified criterion
+        boxes_to_refine = _identify_boxes_to_refine(
+            morse_graph,
+            model.grid,
+            threshold=refinement_threshold,
+            criterion=criterion,
+            model=model,
+            criterion_kwargs=criterion_kwargs
+        )
         
         # Record iteration info
         iteration_info = {
@@ -327,41 +346,96 @@ def iterative_morse_computation(model, max_depth: int = 5, refinement_threshold:
     return final_morse_graph, refinement_history
 
 
-def _identify_boxes_to_refine(morse_graph: nx.DiGraph, grid: 'AdaptiveGrid', threshold: float = 0.1) -> List[int]:
+def diameter_criterion(box, image_box, expansion_threshold=2.0):
     """
-    Identify boxes that should be refined based on Morse graph structure.
+    Refine if image diameter exceeds box diameter significantly.
+    
+    This criterion identifies boxes where the dynamics significantly expands
+    the state space, indicating complex behavior that may benefit from higher resolution.
+    
+    :param box: Box coordinates as (2, D) array
+    :param image_box: Image box coordinates as (2, D) array
+    :param expansion_threshold: Minimum ratio of image diameter to box diameter for refinement
+    :return: True if box should be refined, False otherwise
+    """
+    box_diam = np.linalg.norm(box[1] - box[0])
+    image_diam = np.linalg.norm(image_box[1] - image_box[0])
+    return image_diam > expansion_threshold * box_diam
 
-    A box is selected for refinement if it belongs to a Morse set that:
-    1. Has more than one box (non-trivial)
-    2. Covers a large enough volume relative to the total domain (above threshold)
+
+def _identify_boxes_to_refine(
+    morse_graph: nx.DiGraph,
+    grid: 'AdaptiveGrid',
+    threshold: float = 0.1,
+    criterion: str = 'volume',
+    model = None,
+    criterion_kwargs: dict = None
+) -> List[int]:
+    """
+    Identify boxes that should be refined based on various criteria.
+
+    Available criteria:
+    - 'volume': Volume-based heuristic (original method)
+    - 'diameter': Refine boxes where dynamics expands significantly
 
     :param morse_graph: The computed Morse graph
-    :param grid: The adaptive grid, used to compute volumes
-    :param threshold: Minimum relative volume for a Morse set to be considered for refinement
+    :param grid: The adaptive grid, used to compute volumes and get boxes
+    :param threshold: Minimum relative volume for volume-based criterion
+    :param criterion: Refinement criterion to use ('volume' or 'diameter')
+    :param model: The Model instance (required for diameter criterion)
+    :param criterion_kwargs: Additional keyword arguments for the criterion functions
     :return: List of box indices to refine
     """
-    total_volume = np.prod(grid.bounds[1] - grid.bounds[0])
-    if total_volume == 0:
-        # Avoid division by zero if the domain is flat
-        return []
+    if criterion_kwargs is None:
+        criterion_kwargs = {}
+    
+    # Volume-based criterion (original implementation)
+    if criterion == 'volume':
+        total_volume = np.prod(grid.bounds[1] - grid.bounds[0])
+        if total_volume == 0:
+            return []
+            
+        leaf_map = grid.leaf_map
+        boxes_to_refine = []
+
+        for morse_set in morse_graph.nodes():
+            set_size = len(morse_set)
+
+            # Calculate volume of this Morse set
+            morse_set_volume = sum(
+                np.prod(leaf_map[i].bounds[1] - leaf_map[i].bounds[0]) 
+                for i in morse_set if i in leaf_map
+            )
+            relative_volume = morse_set_volume / total_volume
+
+            # Criteria for refinement:
+            # 1. Non-trivial (more than 1 box)
+            # 2. Significant volume relative to domain
+            if set_size > 1 and relative_volume >= threshold:
+                boxes_to_refine.extend(list(morse_set))
+
+        return boxes_to_refine
+    
+    # Diameter-based criterion
+    elif criterion == 'diameter':
+        if model is None:
+            raise ValueError("model required for diameter criterion")
         
-    leaf_map = grid.leaf_map
-    boxes_to_refine = []
-
-    for morse_set in morse_graph.nodes():
-        set_size = len(morse_set)
-
-        # Calculate volume of this Morse set
-        morse_set_volume = sum(np.prod(leaf_map[i].bounds[1] - leaf_map[i].bounds[0]) for i in morse_set if i in leaf_map)
-        relative_volume = morse_set_volume / total_volume
-
-        # Criteria for refinement:
-        # 1. Non-trivial (more than 1 box)
-        # 2. Significant volume relative to domain
-        if set_size > 1 and relative_volume >= threshold:
-            boxes_to_refine.extend(list(morse_set))
-
-    return boxes_to_refine
+        expansion_threshold = criterion_kwargs.get('expansion_threshold', 2.0)
+        boxes_to_refine = []
+        
+        # Check all boxes in all Morse sets
+        for morse_set in morse_graph.nodes():
+            for box_idx in morse_set:
+                box = grid.get_boxes_by_index([box_idx])[0]
+                image_box = model.dynamics(box)
+                if diameter_criterion(box, image_box, expansion_threshold):
+                    boxes_to_refine.append(box_idx)
+        
+        return boxes_to_refine
+    
+    else:
+        raise ValueError(f"Unknown criterion: {criterion}. Choose from: 'volume', 'diameter'")
 
 
 def analyze_refinement_convergence(refinement_history: List[Dict]) -> Dict:

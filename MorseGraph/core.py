@@ -36,23 +36,52 @@ class Model:
         boxes = self.grid.get_boxes()
         active_box_indices = self.dynamics.get_active_boxes(self.grid)
 
-        def compute_adjacencies(i):
-            image_box = self.dynamics(boxes[i])
-            adj = self.grid.box_to_indices(image_box)
-            return i, adj
+        # Check if grid supports batch mode for box_to_indices
+        has_batch_mode = hasattr(self.grid, 'box_to_indices_batch')
+        
+        if has_batch_mode:
+            # Batch mode: compute all image boxes in parallel, then process indices in batch
+            def compute_image_box(i):
+                return i, self.dynamics(boxes[i])
+            
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(compute_image_box)(i) for i in active_box_indices
+            )
+            
+            # Extract indices and image boxes
+            indices = [i for i, _ in results]
+            image_boxes = np.array([img_box for _, img_box in results])
+            
+            # Use batch mode to compute all adjacencies at once
+            adjacencies = self.grid.box_to_indices_batch(image_boxes)
+            
+            # Build graph from batch results
+            graph = nx.DiGraph()
+            graph.add_nodes_from(active_box_indices)
+            
+            for i, adj in zip(indices, adjacencies):
+                for j in adj:
+                    if j in active_box_indices:
+                        graph.add_edge(i, j)
+        else:
+            # Standard mode: compute adjacencies individually in parallel
+            def compute_adjacencies(i):
+                image_box = self.dynamics(boxes[i])
+                adj = self.grid.box_to_indices(image_box)
+                return i, adj
 
-        results = Parallel(n_jobs=n_jobs)(
-            delayed(compute_adjacencies)(i) for i in active_box_indices
-        )
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(compute_adjacencies)(i) for i in active_box_indices
+            )
 
-        graph = nx.DiGraph()
-        # Only add active boxes as nodes
-        graph.add_nodes_from(active_box_indices)
+            graph = nx.DiGraph()
+            # Only add active boxes as nodes
+            graph.add_nodes_from(active_box_indices)
 
-        for i, adj in results:
-            for j in adj:
-                # Only add edges to active boxes (j might be inactive)
-                if j in active_box_indices:
-                    graph.add_edge(i, j)
+            for i, adj in results:
+                for j in adj:
+                    # Only add edges to active boxes (j might be inactive)
+                    if j in active_box_indices:
+                        graph.add_edge(i, j)
 
         return graph

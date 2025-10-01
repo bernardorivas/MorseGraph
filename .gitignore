@@ -121,3 +121,5 @@ build/
 # Google, Anthropic, etc.
 .serena/
 .claude/
+CLAUDE.md 
+GEMINI.md

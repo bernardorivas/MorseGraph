@@ -118,6 +118,50 @@ class UniformGrid(AbstractGrid):
         # Convert grid coordinates to flat indices
         return np.ravel_multi_index(grid_coords.T, self.divisions)
 
+    def box_to_indices_batch(self, boxes: np.ndarray) -> list:
+        """
+        Vectorized index computation for multiple boxes.
+        
+        :param boxes: Array of shape (N, 2, D) containing N boxes
+        :return: List of N arrays, where each array contains the indices
+                 of grid boxes that intersect with the corresponding input box
+        """
+        N = boxes.shape[0]
+        
+        # Vectorized clipping: clip all boxes at once
+        clipped_boxes = np.clip(boxes, self.bounds[0], self.bounds[1])
+        
+        # Vectorized min/max index calculation
+        min_indices = np.floor((clipped_boxes[:, 0, :] - self.bounds[0]) / self.box_size).astype(int)
+        max_indices = np.ceil((clipped_boxes[:, 1, :] - self.bounds[0]) / self.box_size).astype(int) - 1
+        
+        # Clip indices to valid range
+        min_indices = np.clip(min_indices, 0, self.divisions - 1)
+        max_indices = np.clip(max_indices, 0, self.divisions - 1)
+        
+        # Process each box (this part is hard to fully vectorize due to variable output sizes)
+        results = []
+        for i in range(N):
+            # Check if clipped box is empty
+            if np.any(clipped_boxes[i, 0] >= clipped_boxes[i, 1]):
+                results.append(np.array([], dtype=int))
+                continue
+            
+            # Check if index range is valid
+            if np.any(min_indices[i] > max_indices[i]):
+                results.append(np.array([], dtype=int))
+                continue
+            
+            # Generate grid coordinates for this box
+            ranges = [range(min_indices[i, d], max_indices[i, d] + 1) for d in range(self.dim)]
+            grid_coords = np.array(np.meshgrid(*ranges)).T.reshape(-1, self.dim)
+            
+            # Convert to flat indices
+            flat_indices = np.ravel_multi_index(grid_coords.T, self.divisions)
+            results.append(flat_indices)
+        
+        return results
+
     def subdivide(self, indices: np.ndarray = None):
         """
         Subdivide the grid. For a uniform grid, this is a global operation.
@@ -246,9 +290,23 @@ class AdaptiveGrid(AbstractGrid):
         self.leaves = [self.root]
         self.root.index = 0
         self.leaf_map = {0: self.root}
+        
+        # Spatial cache for fast box_to_indices queries
+        self._leaf_cache = []  # List of (leaf_index, leaf_bounds) tuples
+        self._cache_valid = False
     
     def update_leaf_map(self):
         self.leaf_map = {leaf.index: leaf for leaf in self.leaves}
+
+    def _rebuild_leaf_cache(self):
+        """
+        Build spatial cache for fast leaf lookups.
+        
+        Stores a list of (leaf_index, leaf_bounds) tuples to avoid
+        tree traversal in box_to_indices queries.
+        """
+        self._leaf_cache = [(leaf.index, leaf.bounds) for leaf in self.leaves]
+        self._cache_valid = True
 
     def get_boxes(self) -> np.ndarray:
         """Return all active boxes (leaf node bounds)."""
@@ -262,17 +320,17 @@ class AdaptiveGrid(AbstractGrid):
     
     def box_to_indices(self, box: np.ndarray) -> np.ndarray:
         """Find leaf node indices that intersect with the given box."""
+        # Rebuild cache if invalid
+        if not self._cache_valid:
+            self._rebuild_leaf_cache()
+        
+        # Use cache for fast lookup - check intersection directly without tree traversal
         intersecting_indices = []
+        for leaf_index, leaf_bounds in self._leaf_cache:
+            # Check if leaf bounds intersect with query box
+            if np.all(leaf_bounds[0] <= box[1]) and np.all(box[0] <= leaf_bounds[1]):
+                intersecting_indices.append(leaf_index)
         
-        def traverse(node):
-            if node.intersects_box(box):
-                if node.is_leaf:
-                    intersecting_indices.append(node.index)
-                else:
-                    for child in node.children:
-                        traverse(child)
-        
-        traverse(self.root)
         return np.array(intersecting_indices, dtype=int)
 
     def get_boxes_by_index(self, indices: List[int]) -> np.ndarray:
@@ -291,6 +349,9 @@ class AdaptiveGrid(AbstractGrid):
         :return: A dictionary mapping the index of each subdivided parent box
                  to a list of the indices of its new children.
         """
+        # Invalidate cache since grid structure will change
+        self._cache_valid = False
+        
         if indices is None:
             nodes_to_subdivide = list(self.leaves)
         else:
