@@ -110,7 +110,7 @@ class BoxMapData(Dynamics):
     """
     A data-driven dynamical system optimized for uniform grids.
     
-    Supports flexible error models:
+    Supports:
     - Input perturbation: B(x, input_epsilon) 
     - Output perturbation: B(f(x), output_epsilon)
     - Grid dilation: expand to neighboring boxes
@@ -123,84 +123,125 @@ class BoxMapData(Dynamics):
     This implementation assumes uniform grid spacing and pre-assigns 
     data points to grid boxes for performance.
     """
-    def __init__(self, X: np.ndarray, Y: np.ndarray, grid, 
-                 input_epsilon: float = None, output_epsilon: float = None,
-                 dilation_radius: int = 0, map_empty: str = 'interpolate'):
+    def __init__(self, X: np.ndarray, Y: np.ndarray, grid,
+                 input_distance_metric='L1',          # L1 (manhattan) or L2 (euclidean)
+                 output_distance_metric='L1',         # L1 (manhattan) or L2 (euclidean)
+                 input_epsilon: float = None,         # Can be scalar or array
+                 output_epsilon: float = None,        # Can be scalar or array
+                 map_empty: str = 'interpolate',
+                 k_neighbors: int = 5,
+                 force_interpolation: bool = False,
+                 output_enclosure: str = 'box_enclosure'):
         """
-        :param X: A numpy array of shape (N, D) of input data points.
-        :param Y: A numpy array of shape (N, D) of output data points.
-        :param grid: The UniformGrid instance used for discretization.
-        :param input_epsilon: Input domain uncertainty - expand input boxes by this amount.
-                             If None, defaults to the minimum box size (full box width).
-        :param output_epsilon: Output domain uncertainty - bloat output bounding boxes by this amount.
-                              If None, defaults to the minimum box size (full box width).
-        :param dilation_radius: Grid dilation radius - include neighboring boxes (0 = no dilation).
-        :param map_empty: How to handle empty boxes: 'interpolate', 'outside', or 'terminate'.
+        Distance metrics:
+        - 'L1': Manhattan/box-based neighborhoods (touches faces only)
+        - 'L2': Euclidean/ball-based neighborhoods (includes corners)
+
+        Epsilon behavior:
+        - None: defaults to per-dimension cell size (grid.box_size)
+        - Scalar: uniform radius in all dimensions
+        - Array shape (D,): per-dimension radii for axis-aligned neighborhoods
+
+        Note on L1 vs touching neighbors:
+        - L1 with radius=1 gives face-adjacent boxes (6 in 3D)
+        - L2 with radius=box_diagonal includes corner-touching boxes
+
+        :param k_neighbors: Number of nearest neighbors to use for interpolation (default: 5)
+        :param force_interpolation: If True, apply interpolation strategy to ALL boxes,
+                                   creating smooth continuous dynamics across the entire domain.
+                                   If False, only interpolate boxes without data (default: False)
+        :param output_enclosure: Strategy for converting output points to grid boxes.
+                                Options:
+                                - 'box_enclosure' (default): Filled rectangular region [min_idx, max_idx].
+                                  Most common, computes bounding box then fills rectangle.
+                                - 'box_union': Sparse union of boxes near each B(yi, eps).
+                                  More conservative, respects epsilon in discrete box space.
         """
         self.X = X
         self.Y = Y
         self.grid = grid
         self.map_empty = map_empty
-        
-        # Calculate default epsilon values if not provided
-        if input_epsilon is None or output_epsilon is None:
-            # Use the minimum box size as default epsilon (full box width)
-            # This follows CMGDB's domain_padding approach
-            default_epsilon = np.min(grid.box_size)
-            
-        self.input_epsilon = input_epsilon if input_epsilon is not None else default_epsilon
-        self.output_epsilon = output_epsilon if output_epsilon is not None else default_epsilon
-        self.dilation_radius = dilation_radius
-        
+        self.input_distance_metric = input_distance_metric
+        self.output_distance_metric = output_distance_metric
+        self.k_neighbors = k_neighbors
+        self.force_interpolation = force_interpolation
+        self.output_enclosure = output_enclosure
+
+        # Validate output_enclosure
+        valid_enclosures = ['box_enclosure', 'box_union']
+        if output_enclosure not in valid_enclosures:
+            raise ValueError(f"output_enclosure must be one of {valid_enclosures}, got '{output_enclosure}'")
+
+        # Handle epsilon as scalar or vector
+        if input_epsilon is None:
+            # Default: use per-dimension cell size
+            self.input_epsilon = grid.box_size.copy()
+        elif np.isscalar(input_epsilon):
+            self.input_epsilon = np.full(grid.dim, input_epsilon)
+        else:
+            input_epsilon = np.array(input_epsilon)
+            if input_epsilon.shape != (grid.dim,):
+                raise ValueError(f"Epsilon must be scalar or array of shape ({grid.dim},)")
+            self.input_epsilon = input_epsilon
+
+        if output_epsilon is None:
+            # Default: use per-dimension cell size
+            self.output_epsilon = grid.box_size.copy()
+        elif np.isscalar(output_epsilon):
+            self.output_epsilon = np.full(grid.dim, output_epsilon)
+        else:
+            output_epsilon = np.array(output_epsilon)
+            if output_epsilon.shape != (grid.dim,):
+                raise ValueError(f"Epsilon must be scalar or array of shape ({grid.dim},)")
+            self.output_epsilon = output_epsilon
+
         # Pre-assign each data point to its grid box
         self._assign_points_to_boxes()
 
-    @classmethod
-    def from_data(cls, X: np.ndarray, Y: np.ndarray, domain: np.ndarray = None, 
-                  grid_resolution: int = None, **kwargs):
+    def _get_boxes_in_epsilon_neighborhood(self, point: np.ndarray, 
+                                           epsilon: np.ndarray, 
+                                           metric: str) -> np.ndarray:
         """
-        Factory method to create BoxMapData with automatic grid setup.
+        Find all boxes that intersect with epsilon-neighborhood of point.
         
-        :param X: Input data points of shape (N, D)
-        :param Y: Output data points of shape (N, D)  
-        :param domain: Domain bounds of shape (2, D). If None, auto-detected from data.
-        :param grid_resolution: Grid resolution (2^resolution boxes per dimension). 
-                               If None, auto-selected based on data density.
-        :param kwargs: Additional arguments passed to BoxMapData constructor
-        :return: BoxMapData instance with automatically configured grid
+        Handles three cases:
+        1. epsilon << box_size: May return 0 boxes (point in box center, epsilon tiny)
+        2. epsilon ~ box_size: Returns few boxes (1-27 in 3D for L2)
+        3. epsilon >> box_size: Returns many boxes
+        
+        :param point: Center point of neighborhood
+        :param epsilon: Per-dimension radii (array of shape (D,))
+        :param metric: 'L1' or 'L2'
+        :return: Array of box indices that intersect the neighborhood
         """
-        from .grids import UniformGrid
-        
-        # Auto-detect domain if not provided
-        if domain is None:
-            # Use both X and Y to determine domain bounds
-            all_points = np.vstack([X, Y])
-            margin = 0.1  # 10% margin around data
-            data_min = np.min(all_points, axis=0)
-            data_max = np.max(all_points, axis=0)
-            data_range = data_max - data_min
-            
-            domain = np.array([
-                data_min - margin * data_range,
-                data_max + margin * data_range
+        if metric == 'L1':
+            # Axis-aligned rectangular neighborhood
+            # Intersection = boxes whose bounds overlap with [point-eps, point+eps]
+            neighborhood_box = np.array([
+                point - epsilon,
+                point + epsilon
             ])
+            return self.grid.box_to_indices(neighborhood_box)
         
-        # Auto-select grid resolution if not provided
-        if grid_resolution is None:
-            # Heuristic: aim for ~10-50 data points per box on average
-            n_points = len(X)
-            target_points_per_box = 20
-            target_boxes = max(16, n_points // target_points_per_box)
-            # Find resolution that gives approximately target_boxes total boxes
-            grid_resolution = int(np.log2(target_boxes**(1/len(domain[0]))))
-            grid_resolution = max(3, min(10, grid_resolution))  # Clamp to reasonable range
+        elif metric == 'L2':
+            # Ball-based neighborhood (includes corners)
+            # Find all boxes within Euclidean distance
+            all_boxes = self.grid.get_boxes()
+            box_centers = (all_boxes[:, 0, :] + all_boxes[:, 1, :]) / 2
+            
+            # Check if box center or any corner is within epsilon ball
+            # More conservative: check if box intersects ball
+            distances = np.linalg.norm(box_centers - point, axis=1)
+            box_half_diag = np.linalg.norm(self.grid.box_size) / 2
+            
+            # Box intersects ball if center_distance <= epsilon_radius + box_half_diagonal
+            epsilon_radius = np.linalg.norm(epsilon)
+            intersecting = distances <= (epsilon_radius + box_half_diag)
+            
+            return np.where(intersecting)[0]
         
-        # Create grid
-        divisions = np.full(len(domain[0]), 2**grid_resolution, dtype=int)
-        grid = UniformGrid(bounds=domain, divisions=divisions)
-        
-        # Create BoxMapData instance
-        return cls(X, Y, grid, **kwargs)
+        else:
+            raise ValueError(f"Unknown metric: {metric}. Use 'L1' or 'L2'.")
 
     def _assign_points_to_boxes(self):
         """Pre-compute which data points belong to each grid box."""
@@ -214,7 +255,7 @@ class BoxMapData(Dynamics):
                 if box_idx not in self.box_to_points:
                     self.box_to_points[box_idx] = []
                 self.box_to_points[box_idx].append(i)
-    
+
     def _points_to_grid_indices(self, points: np.ndarray) -> np.ndarray:
         """
         Convert points to flat grid indices.
@@ -245,122 +286,329 @@ class BoxMapData(Dynamics):
 
     def __call__(self, box: np.ndarray) -> np.ndarray:
         """
-        Computes a bounding box of the image under the data-driven map.
-        
-        Supports:
-        1. Input perturbation: expands input box by input_epsilon
-        2. Output perturbation: expands output image by output_epsilon  
-        3. Grid dilation: include n-neighboring boxes in computation
-        4. Empty box handling: interpolate, outside, or terminate
-        
+        Compute image of box under data-driven map.
+
+        Uses the output_enclosure strategy to convert output points to grid boxes:
+
+        - 'box_enclosure' (default): Computes bounding box of all yi ± epsilon,
+          then grid.box_to_indices() fills the rectangular index region.
+          Result: Filled rectangle [min_idx, max_idx].
+
+        - 'box_union': For each yi, finds boxes intersecting B(yi, epsilon),
+          then returns union of all such boxes.
+          Result: Sparse union (more conservative).
+
         :param box: A numpy array of shape (2, D) representing the lower and upper
                     bounds of a D-dimensional box.
-        :return: A numpy array of shape (2, D) representing the bloated
-                 bounding box of the image.
+        :return: A numpy array of shape (2, D) representing the bounding box
+                 of the image.
         """
-        # Apply input perturbation if specified
-        if self.input_epsilon > 0:
+
+        # If force_interpolation is True, always use interpolation strategy
+        if self.force_interpolation:
+            # Determine interpolation strategy
+            if self.map_empty == 'interpolate':
+                strategy = 'k_nearest_points'  # default
+            elif self.map_empty in ['k_nearest_points', 'k_nearest_boxes', 'n_box_neighborhood']:
+                strategy = self.map_empty
+            else:
+                # For 'outside' or 'terminate', fall back to k_nearest_points
+                strategy = 'k_nearest_points'
+
+            return self._interpolate_from_neighbors(box, strategy=strategy)
+
+        # Get data points in epsilon-neighborhood of box
+        box_center = (box[0] + box[1]) / 2
+
+        if self.input_distance_metric == 'L1':
+            # Expand box by input_epsilon, find intersecting boxes
             expanded_box = np.array([
                 box[0] - self.input_epsilon,
                 box[1] + self.input_epsilon
             ])
+            relevant_boxes = self.grid.box_to_indices(expanded_box)
         else:
-            expanded_box = box.copy()
-        
-        # Find which grid boxes to consider
-        box_indices = self._get_relevant_box_indices(expanded_box)
-        
-        # Collect all relevant data points
+            # Use epsilon-ball around box center
+            relevant_boxes = self._get_boxes_in_epsilon_neighborhood(
+                box_center, self.input_epsilon, self.input_distance_metric
+            )
+
+        # Collect data from these boxes
         all_point_indices = []
-        for box_idx in box_indices:
+        for box_idx in relevant_boxes:
             if box_idx in self.box_to_points:
                 all_point_indices.extend(self.box_to_points[box_idx])
-        
-        # Handle empty boxes according to strategy
+
         if not all_point_indices:
             return self._handle_empty_box(box)
-        
-        # Get the corresponding points in Y
+
+        # Get corresponding image points
         image_points = self.Y[all_point_indices]
-        
-        # Compute the bounding box of the image points
-        min_bounds = np.min(image_points, axis=0)
-        max_bounds = np.max(image_points, axis=0)
-        
-        # Apply output perturbation
-        if self.output_epsilon > 0:
-            min_bounds -= self.output_epsilon
-            max_bounds += self.output_epsilon
-        
-        return np.array([min_bounds, max_bounds])
+
+        if self.output_enclosure == 'box_enclosure':
+            # Box enclosure: bounding box + output_epsilon bloating
+            # grid.box_to_indices() will fill the rectangular index region
+            min_bounds = np.min(image_points, axis=0) - self.output_epsilon
+            max_bounds = np.max(image_points, axis=0) + self.output_epsilon
+            return np.array([min_bounds, max_bounds])
+
+        elif self.output_enclosure == 'box_union':
+            # Box union: find all boxes near each image point, take union
+            all_target_boxes = set()
+
+            for y_point in image_points:
+                nearby_boxes = self._get_boxes_in_epsilon_neighborhood(
+                    y_point, self.output_epsilon, self.output_distance_metric
+                )
+                all_target_boxes.update(nearby_boxes)
+
+            if not all_target_boxes:
+                # Fallback to box_enclosure mode
+                min_bounds = np.min(image_points, axis=0) - self.output_epsilon
+                max_bounds = np.max(image_points, axis=0) + self.output_epsilon
+                return np.array([min_bounds, max_bounds])
+
+            # Return bounding box of union of all target boxes
+            target_box_indices = np.array(list(all_target_boxes))
+            target_boxes = self.grid.get_boxes()[target_box_indices]
+
+            union_min = np.min(target_boxes[:, 0, :], axis=0)
+            union_max = np.max(target_boxes[:, 1, :], axis=0)
+
+            return np.array([union_min, union_max])
+
+        else:
+            raise ValueError(f"Unknown output_enclosure: {self.output_enclosure}")
     
     def _handle_empty_box(self, box: np.ndarray) -> np.ndarray:
         """
         Handle empty boxes according to the specified strategy.
-        
+
         :param box: The empty box
         :return: Image of the empty box according to strategy
         """
         if self.map_empty == 'terminate':
             raise ValueError(f"Box {box.flatten()} has no data points (empty image)")
-        
+
         elif self.map_empty == 'outside':
             # Map to a box outside the grid domain
             # Use a box that's clearly outside the domain bounds
             margin = np.max(self.grid.bounds[1] - self.grid.bounds[0])
             outside_point = self.grid.bounds[1] + margin
             return np.array([outside_point, outside_point + 0.1 * margin])
-        
+
         elif self.map_empty == 'interpolate':
-            # Try to interpolate from neighboring boxes
-            return self._interpolate_from_neighbors(box)
-        
+            # Default interpolation strategy (k_nearest_points)
+            return self._interpolate_from_neighbors(box, strategy='k_nearest_points')
+
+        elif self.map_empty in ['k_nearest_points', 'k_nearest_boxes', 'n_box_neighborhood']:
+            # Specific interpolation strategy
+            return self._interpolate_from_neighbors(box, strategy=self.map_empty)
+
         else:
             raise ValueError(f"Unknown map_empty strategy: {self.map_empty}")
     
-    def _interpolate_from_neighbors(self, box: np.ndarray) -> np.ndarray:
+    def _interpolate_from_neighbors(self, box: np.ndarray,
+                               strategy: str = 'k_nearest_points') -> np.ndarray:
         """
-        Interpolate the image of an empty box from neighboring boxes.
-        
-        :param box: The empty box to interpolate
-        :return: Interpolated image box
+        Interpolate dynamics for boxes with no data.
+
+        Strategies:
+        - 'k_nearest_points': Use k-nearest data points in X
+        - 'k_nearest_boxes': Use k-nearest boxes with data
+        - 'n_box_neighborhood': Expanding neighborhood search
         """
-        # Find neighboring boxes that have data
         box_center = (box[0] + box[1]) / 2
+
+        if strategy == 'k_nearest_points':
+            # Find k nearest data points in X
+            k = min(self.k_neighbors, len(self.X))
+            distances = np.linalg.norm(self.X - box_center, axis=1)
+            nearest_idx = np.argpartition(distances, k-1)[:k]
+
+            # Use their corresponding Y values
+            image_points = self.Y[nearest_idx]
+
+            # Return bounding box expanded by output_epsilon
+            min_bounds = np.min(image_points, axis=0) - self.output_epsilon
+            max_bounds = np.max(image_points, axis=0) + self.output_epsilon
+            return np.array([min_bounds, max_bounds])
+
+        elif strategy == 'k_nearest_boxes':
+            # Find k nearest boxes with data (by box center distance)
+            all_boxes = self.grid.get_boxes()
+            all_box_centers = (all_boxes[:, 0, :] + all_boxes[:, 1, :]) / 2
+
+            # Find boxes that have data
+            boxes_with_data = list(self.box_to_points.keys())
+
+            if not boxes_with_data:
+                # No data anywhere - map to outside
+                margin = np.max(self.grid.bounds[1] - self.grid.bounds[0])
+                outside_point = self.grid.bounds[1] + margin
+                return np.array([outside_point, outside_point + 0.1 * margin])
+
+            # Compute distances from empty box center to all boxes with data
+            data_box_centers = all_box_centers[boxes_with_data]
+            distances = np.linalg.norm(data_box_centers - box_center, axis=1)
+
+            # Find k nearest (or fewer if we don't have k boxes)
+            k = min(self.k_neighbors, len(boxes_with_data))
+            nearest_box_indices = np.argpartition(distances, k-1)[:k]
+            nearest_box_ids = [boxes_with_data[i] for i in nearest_box_indices]
+
+            # Collect Y points from these boxes
+            image_points = []
+            for box_id in nearest_box_ids:
+                point_indices = self.box_to_points[box_id]
+                image_points.extend(self.Y[point_indices])
+
+            image_points = np.array(image_points)
+
+            # Compute bounding box + output_epsilon
+            min_bounds = np.min(image_points, axis=0) - self.output_epsilon
+            max_bounds = np.max(image_points, axis=0) + self.output_epsilon
+            result_box = np.array([min_bounds, max_bounds])
+
+            # Check if genuinely outside domain
+            if self._is_box_outside_domain(result_box):
+                # Map to outside
+                margin = np.max(self.grid.bounds[1] - self.grid.bounds[0])
+                outside_point = self.grid.bounds[1] + margin
+                return np.array([outside_point, outside_point + 0.1 * margin])
+
+            return result_box
+
+        elif strategy == 'n_box_neighborhood':
+            # Expanding neighborhood search using grid structure
+            # Similar to L1 epsilon strategy but for empty boxes
+            return self._interpolate_n_box_neighborhood(box)
+
+        else:
+            raise ValueError(f"Unknown interpolation strategy: {strategy}")
+
+    def _get_neighbor_box_indices(self, box_idx: int) -> list:
+        """
+        Get all boxes that touch the given box (share face, edge, or corner).
+        
+        In 2D: up to 8 neighbors (like chess king moves)
+        In 3D: up to 26 neighbors
+        
+        :param box_idx: Index of the box
+        :return: List of neighboring box indices
+        """
+        # Convert linear index to grid coordinates
+        grid_coords = np.unravel_index(box_idx, self.grid.divisions)
+        neighbors = []
+        
+        # Generate all offset combinations (-1, 0, 1) in each dimension
+        # but exclude (0, 0, ..., 0) which is the box itself
+        dim = self.grid.dim
+        offsets = np.array(np.meshgrid(*([[-1, 0, 1]] * dim))).T.reshape(-1, dim)
+        
+        for offset in offsets:
+            if np.all(offset == 0):
+                continue  # Skip the box itself
+            
+            neighbor_coords = np.array(grid_coords) + offset
+            
+            # Check if neighbor is within grid bounds
+            if np.all(neighbor_coords >= 0) and np.all(neighbor_coords < self.grid.divisions):
+                neighbor_idx = np.ravel_multi_index(tuple(neighbor_coords), self.grid.divisions)
+                neighbors.append(neighbor_idx)
+        
+        return neighbors
+
+    def _interpolate_n_box_neighborhood(self, box: np.ndarray) -> np.ndarray:
+        """
+        Find outputs using expanding neighborhood search (BFS).
+
+        For a box without data:
+        1. Look at all boxes that intersect/touch it
+        2. If they have data/outputs, collect those outputs
+        3. If not, expand to their neighbors (BFS)
+        4. Continue until finding boxes with data
+
+        Only returns "outside" if all found outputs are outside domain.
+        """
+        # Get the box index for this box
+        box_center = (box[0] + box[1]) / 2
+
+        # Find which box index this corresponds to
+        # (Assuming box aligns with grid - it should since we're processing grid boxes)
         grid_coords = np.floor((box_center - self.grid.bounds[0]) / self.grid.box_size).astype(int)
+        grid_coords = np.clip(grid_coords, 0, self.grid.divisions - 1)
+        start_box_idx = np.ravel_multi_index(tuple(grid_coords), self.grid.divisions)
+
+        # BFS to find nearest boxes with data
+        from collections import deque
+        visited = set()
+        queue = deque([start_box_idx])
+        visited.add(start_box_idx)
+
+        while queue:
+            current_idx = queue.popleft()
+
+            # Check if this box has data
+            if current_idx in self.box_to_points:
+                # Found a box with data! Collect its output
+                point_indices = self.box_to_points[current_idx]
+                image_points = self.Y[point_indices]
+
+                # Compute bounding box + output_epsilon
+                min_bounds = np.min(image_points, axis=0) - self.output_epsilon
+                max_bounds = np.max(image_points, axis=0) + self.output_epsilon
+                result_box = np.array([min_bounds, max_bounds])
+
+                # Only return outside if result is genuinely outside domain
+                if self._is_box_outside_domain(result_box):
+                    # Map to outside
+                    margin = np.max(self.grid.bounds[1] - self.grid.bounds[0])
+                    outside_point = self.grid.bounds[1] + margin
+                    return np.array([outside_point, outside_point + 0.1 * margin])
+
+                return result_box
+
+            # No data in this box, expand to neighbors
+            neighbors = self._get_neighbor_box_indices(current_idx)
+            for neighbor_idx in neighbors:
+                if neighbor_idx not in visited:
+                    visited.add(neighbor_idx)
+                    queue.append(neighbor_idx)
+
+        # Should never reach here if grid is connected, but just in case:
+        # Map to outside
+        margin = np.max(self.grid.bounds[1] - self.grid.bounds[0])
+        outside_point = self.grid.bounds[1] + margin
+        return np.array([outside_point, outside_point + 0.1 * margin])
+
+
+
+
+    def _is_box_outside_domain(self, box: np.ndarray) -> bool:
+        """
+        Check if a bounding box is entirely outside the grid domain.
         
-        # Look for neighbors in expanding radius
-        for radius in range(1, min(self.grid.divisions) // 2):
-            neighbor_images = []
-            
-            # Check all boxes within radius
-            for di in range(-radius, radius + 1):
-                for dj in range(-radius, radius + 1):
-                    if abs(di) == radius or abs(dj) == radius:  # Only check perimeter
-                        neighbor_coords = grid_coords + np.array([di, dj])
-                        
-                        # Check if neighbor is valid
-                        if np.all(neighbor_coords >= 0) and np.all(neighbor_coords < self.grid.divisions):
-                            neighbor_idx = np.ravel_multi_index(neighbor_coords, self.grid.divisions)
-                            
-                            if neighbor_idx in self.box_to_points:
-                                # Get image of this neighbor box
-                                neighbor_box = self.grid.get_boxes()[neighbor_idx]
-                                neighbor_image = self.__call__(neighbor_box)
-                                neighbor_images.append(neighbor_image)
-            
-            if neighbor_images:
-                # Average the neighbor images
-                all_images = np.array(neighbor_images)
-                min_bounds = np.min(all_images[:, 0, :], axis=0)
-                max_bounds = np.max(all_images[:, 1, :], axis=0)
-                return np.array([min_bounds, max_bounds])
+        :param box: Bounding box of shape (2, D)
+        :return: True if box doesn't intersect with grid domain
+        """
+        # Box is outside if:
+        # - Its max bound is less than domain min (box is below/left of domain)
+        # - Its min bound is greater than domain max (box is above/right of domain)
         
-        # If no neighbors found, map to self (identity-like behavior with bloating)
-        min_bounds = box[0] - self.output_epsilon
-        max_bounds = box[1] + self.output_epsilon
-        return np.array([min_bounds, max_bounds])
-    
+        # Check if there's any intersection
+        # No intersection if box_max < domain_min OR box_min > domain_max in any dimension
+        domain_min = self.grid.bounds[0]
+        domain_max = self.grid.bounds[1]
+        
+        # Check each dimension
+        for d in range(self.grid.dim):
+            if box[1, d] < domain_min[d] or box[0, d] > domain_max[d]:
+                # No overlap in this dimension -> box is outside
+                return True
+        
+        return False
+
     def _get_relevant_box_indices(self, box: np.ndarray) -> np.ndarray:
         """
         Get all box indices relevant for the given box, including dilation.
@@ -381,19 +629,28 @@ class BoxMapData(Dynamics):
     def get_active_boxes(self, grid) -> np.ndarray:
         """
         Return boxes to be processed during computation.
-        
-        For 'terminate' mode, returns all boxes to detect empty ones.
-        For other modes, returns only boxes that contain data points.
-        
+
+        Returns all boxes when:
+        - force_interpolation=True (for continuous dynamics)
+        - map_empty='terminate' (to detect empty boxes)
+        - map_empty='interpolate' or other interpolation strategies (for CMGDB compatibility)
+
+        Otherwise returns only boxes that contain data points.
+
         :param grid: The grid (should match self.grid)
         :return: Array of box indices to process
         """
-        if self.map_empty == 'terminate':
-            # Process all boxes to detect empty ones
+        if self.force_interpolation or self.map_empty == 'terminate':
+            # Process all boxes for continuous interpolation or to detect empty ones
+            return np.arange(len(grid.get_boxes()))
+        elif self.map_empty in ['interpolate', 'k_nearest_points', 'k_nearest_boxes', 'n_box_neighborhood']:
+            # Process ALL boxes for interpolation modes (matches CMGDB behavior)
+            # This ensures continuous dynamics across the entire domain
             return np.arange(len(grid.get_boxes()))
         else:
-            # Only process boxes with data for efficiency
+            # map_empty='outside': only process boxes with data
             return np.array(list(self.box_to_points.keys()), dtype=int)
+
 
 
 

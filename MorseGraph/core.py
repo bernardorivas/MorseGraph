@@ -11,26 +11,30 @@ class Model:
     The core engine that connects dynamics and grids.
     """
 
-    def __init__(self, grid: AbstractGrid, dynamics: Dynamics):
+    def __init__(self, grid: AbstractGrid, dynamics: Dynamics,
+                 dynamics_kwargs: dict = None):
         """
         :param grid: The grid that discretizes the state space.
         :param dynamics: The dynamical system.
+        :param dynamics_kwargs: Additional kwargs to pass to dynamics.__call__
+                               (optional, usually not needed)
         """
         self.grid = grid
         self.dynamics = dynamics
+        self.dynamics_kwargs = dynamics_kwargs or {}
 
     def compute_box_map(self, n_jobs: int = -1) -> nx.DiGraph:
         """
-        Compute the BoxMap, which represents the discrete dynamical system on grid boxes.
+        Compute the BoxMap.
 
-        This method iterates over active boxes in the grid (those with meaningful dynamics),
-        computes the image of each box under the dynamics, and finds which other grid boxes 
-        intersect with this image. The result is a directed graph representing the BoxMap
-        where edges indicate possible transitions between boxes.
+        For each active box, computes its image under the dynamics and converts
+        it to grid box indices. Note that for BoxMapData with output_enclosure='box_enclosure'
+        (the default), grid.box_to_indices() creates a FILLED RECTANGULAR REGION of boxes,
+        not just a sparse union. This implements the "cubical convex closure" of the output.
 
         :param n_jobs: The number of jobs to run in parallel. -1 means using all
                        available CPUs.
-        :return: A directed graph representing the BoxMap, where nodes are box 
+        :return: A directed graph representing the BoxMap, where nodes are box
                  indices and edges represent possible transitions.
         """
         boxes = self.grid.get_boxes()
@@ -42,7 +46,7 @@ class Model:
         if has_batch_mode:
             # Batch mode: compute all image boxes in parallel, then process indices in batch
             def compute_image_box(i):
-                return i, self.dynamics(boxes[i])
+                return i, self.dynamics(boxes[i], **self.dynamics_kwargs)
             
             results = Parallel(n_jobs=n_jobs)(
                 delayed(compute_image_box)(i) for i in active_box_indices
@@ -66,7 +70,9 @@ class Model:
         else:
             # Standard mode: compute adjacencies individually in parallel
             def compute_adjacencies(i):
-                image_box = self.dynamics(boxes[i])
+                image_box = self.dynamics(boxes[i], **self.dynamics_kwargs)
+                # Note: grid.box_to_indices() finds ALL boxes that intersect image_box.
+                # For output_enclosure='box_enclosure', this creates a filled rectangle.
                 adj = self.grid.box_to_indices(image_box)
                 return i, adj
 
