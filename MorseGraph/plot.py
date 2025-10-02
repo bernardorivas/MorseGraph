@@ -1,3 +1,4 @@
+import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
@@ -7,7 +8,8 @@ from typing import Dict, Set, FrozenSet
 
 from .grids import AbstractGrid
 
-def plot_morse_sets(grid: AbstractGrid, morse_graph: nx.DiGraph, ax: plt.Axes = None, **kwargs):
+def plot_morse_sets(grid: AbstractGrid, morse_graph: nx.DiGraph, ax: plt.Axes = None,
+                   box_map: nx.DiGraph = None, show_outside: bool = False, **kwargs):
     """
     Plots the Morse sets on a grid.
 
@@ -15,6 +17,8 @@ def plot_morse_sets(grid: AbstractGrid, morse_graph: nx.DiGraph, ax: plt.Axes = 
     :param morse_graph: The Morse graph (NetworkX DiGraph) containing the Morse sets as nodes.
                        Each node should have a 'color' attribute (assigned by compute_morse_graph).
     :param ax: The matplotlib axes to plot on. If None, a new figure and axes are created.
+    :param box_map: The BoxMap (directed graph) from compute_box_map(). Required if show_outside=True.
+    :param show_outside: If True, paint boxes that map outside the domain in grey. Requires box_map.
     :param kwargs: Additional keyword arguments to pass to the PatchCollection.
     """
     if ax is None:
@@ -53,6 +57,32 @@ def plot_morse_sets(grid: AbstractGrid, morse_graph: nx.DiGraph, ax: plt.Axes = 
         pc = PatchCollection(rects, facecolors=colors, alpha=0.7, **kwargs)
         ax.add_collection(pc)
 
+    # Optionally show boxes that map outside the domain (have data but no transitions)
+    if show_outside and box_map is not None:
+        # Collect all boxes in Morse sets
+        morse_set_boxes = set()
+        for morse_set in morse_sets:
+            morse_set_boxes.update(morse_set)
+
+        # Find boxes with out_degree == 0 that are not in any Morse set
+        # These boxes have data but map outside the domain
+        outside_boxes = set()
+        for node in box_map.nodes():
+            if box_map.out_degree(node) == 0 and node not in morse_set_boxes:
+                outside_boxes.add(node)
+
+        # Paint outside boxes grey
+        for box_index in outside_boxes:
+            if box_index < len(all_boxes):
+                box = all_boxes[box_index]
+                rect = Rectangle((box[0, 0], box[0, 1]),
+                               box[1, 0] - box[0, 0],
+                               box[1, 1] - box[0, 1],
+                               facecolor='grey',
+                               edgecolor='none',
+                               alpha=0.4)
+                ax.add_patch(rect)
+
     ax.set_xlim(grid.bounds[0, 0], grid.bounds[1, 0])
     ax.set_ylim(grid.bounds[0, 1], grid.bounds[1, 1])
     ax.set_aspect('equal', adjustable='box')
@@ -64,9 +94,7 @@ def plot_basins_of_attraction(grid: AbstractGrid, basins,
     Plots the basins of attraction with colors matching the Morse sets.
 
     :param grid: The grid object used for the computation.
-    :param basins: Either:
-                   - Dict[FrozenSet[int], Set[int]]: box-level basins (from compute_all_morse_set_basins)
-                   - Dict[FrozenSet[int], Set[FrozenSet[int]]]: Morse-level basins (deprecated)
+    :param basins: Dict[FrozenSet[int], Set[int]]: box-level basins (from compute_all_morse_set_basins)
     :param morse_graph: The Morse graph with color attributes. If provided, uses colors from node attributes.
     :param ax: The matplotlib axes to plot on. If None, a new figure and axes are created.
     :param show_outside: If True, paint boxes not in any basin black (boxes mapping outside domain).
@@ -76,10 +104,6 @@ def plot_basins_of_attraction(grid: AbstractGrid, basins,
         _, ax = plt.subplots()
 
     all_boxes = grid.get_boxes()
-
-    # Detect basin type: check if values are sets of frozensets (Morse basins) or sets of ints (box basins)
-    first_basin = next(iter(basins.values()))
-    is_morse_basin = len(first_basin) > 0 and isinstance(next(iter(first_basin)), frozenset)
 
     # Plot each basin
     for attractor, basin in basins.items():
@@ -91,60 +115,36 @@ def plot_basins_of_attraction(grid: AbstractGrid, basins,
             colors_cmap = plt.cm.get_cmap('viridis', len(basins))
             color = colors_cmap(list(basins.keys()).index(attractor))
 
-        if is_morse_basin:
-            # Morse-level basins: basin is a set of Morse sets (frozensets)
-            # Color all boxes in each Morse set, with attractor at full opacity
-            for morse_set in basin:
-                alpha = 1.0 if morse_set == attractor else 0.7
-                for box_index in morse_set:
-                    if box_index < len(all_boxes):
-                        box = all_boxes[box_index]
-                        rect = Rectangle((box[0, 0], box[0, 1]),
-                                       box[1, 0] - box[0, 0],
-                                       box[1, 1] - box[0, 1],
-                                       facecolor=color,
-                                       edgecolor='none',
-                                       alpha=alpha, **kwargs)
-                        ax.add_patch(rect)
-        else:
-            # Box-level basins: basin is a set of box indices
-            # Plot basin boxes with lower opacity
-            for box_index in basin:
-                if box_index < len(all_boxes):
-                    box = all_boxes[box_index]
-                    rect = Rectangle((box[0, 0], box[0, 1]),
-                                   box[1, 0] - box[0, 0],
-                                   box[1, 1] - box[0, 1],
-                                   facecolor=color,
-                                   edgecolor='none',
-                                   alpha=0.3, **kwargs)
-                    ax.add_patch(rect)
+        # Box-level basins: basin is a set of box indices
+        # Plot basin boxes with lower opacity
+        for box_index in basin:
+            if box_index < len(all_boxes):
+                box = all_boxes[box_index]
+                rect = Rectangle((box[0, 0], box[0, 1]),
+                               box[1, 0] - box[0, 0],
+                               box[1, 1] - box[0, 1],
+                               facecolor=color,
+                               edgecolor='none',
+                               alpha=0.3, **kwargs)
+                ax.add_patch(rect)
 
-            # Plot attractor itself with full opacity
-            for box_index in attractor:
-                if box_index < len(all_boxes):
-                    box = all_boxes[box_index]
-                    rect = Rectangle((box[0, 0], box[0, 1]),
-                                   box[1, 0] - box[0, 0],
-                                   box[1, 1] - box[0, 1],
-                                   facecolor=color,
-                                   edgecolor='none',
-                                   alpha=1.0, **kwargs)
-                    ax.add_patch(rect)
+        # Plot attractor itself with full opacity
+        for box_index in attractor:
+            if box_index < len(all_boxes):
+                box = all_boxes[box_index]
+                rect = Rectangle((box[0, 0], box[0, 1]),
+                               box[1, 0] - box[0, 0],
+                               box[1, 1] - box[0, 1],
+                               facecolor=color,
+                               edgecolor='none',
+                               alpha=1.0, **kwargs)
+                ax.add_patch(rect)
 
     # Optionally show boxes that don't belong to any basin (map outside domain)
     if show_outside:
         all_box_indices = set(range(len(all_boxes)))
-        if is_morse_basin:
-            # For Morse basins, collect all box indices from all Morse sets in all basins
-            basin_box_indices = set()
-            for basin_morse_sets in basins.values():
-                for morse_set in basin_morse_sets:
-                    basin_box_indices.update(morse_set)
-        else:
-            # For box basins, union all basin box sets
-            basin_box_indices = set().union(*basins.values())
-
+        # For box basins, union all basin box sets
+        basin_box_indices = set().union(*basins.values())
         outside_boxes = all_box_indices - basin_box_indices
 
         # Paint outside boxes black
@@ -172,8 +172,7 @@ def plot_morse_graph(morse_graph: nx.DiGraph, ax: plt.Axes = None,
     :param morse_graph: The Morse graph to plot. Each node should have a 'color' attribute
                        (assigned by compute_morse_graph).
     :param ax: The matplotlib axes to plot on. If None, a new figure and axes are created.
-    :param morse_sets_colors: Optional dict mapping morse sets to colors. If None, uses colors
-                             from node attributes. Deprecated - colors should come from graph.
+    :param morse_sets_colors: Deprecated parameter, ignored. Colors are taken from node attributes.
     :param node_size: Size of the nodes.
     :param arrowsize: Size of the arrow heads.
     :param font_size: Font size for node labels.
@@ -183,17 +182,14 @@ def plot_morse_graph(morse_graph: nx.DiGraph, ax: plt.Axes = None,
 
     morse_sets = list(morse_graph.nodes())
 
-    # Use colors from node attributes first, fallback to provided dict or generate
+    # Use colors from node attributes or generate
     node_colors = []
     for morse_set in morse_sets:
         if 'color' in morse_graph.nodes[morse_set]:
-            # Use color from node attribute (preferred)
+            # Use color from node attribute
             node_colors.append(morse_graph.nodes[morse_set]['color'])
-        elif morse_sets_colors and morse_set in morse_sets_colors:
-            # Fallback to provided color dict (deprecated)
-            node_colors.append(morse_sets_colors[morse_set])
         else:
-            # Last resort: generate color (backward compatibility)
+            # Generate color for backward compatibility
             num_sets = len(morse_sets)
             cmap = cm.get_cmap('tab10')
             color = cmap(morse_sets.index(morse_set) / max(num_sets, 10))
@@ -219,3 +215,128 @@ def plot_morse_graph(morse_graph: nx.DiGraph, ax: plt.Axes = None,
                            font_size=font_size, ax=ax)
 
     ax.set_title("Morse Graph")
+
+def plot_data_coverage(grid: AbstractGrid, box_map_data,
+                       ax: plt.Axes = None, colormap: str = 'viridis'):
+    """
+    Visualize how many data points are in each box (2D only).
+
+    User interprets the visualization themselves - no statistics.
+
+    :param grid: The grid
+    :param box_map_data: BoxMapData instance with box_to_points
+    :param ax: Matplotlib axes
+    :param colormap: Color scheme for data density
+    """
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 6))
+
+    if grid.dim != 2:
+        raise ValueError("Data coverage plot only supports 2D grids")
+
+    all_boxes = grid.get_boxes()
+
+    # Count points per box
+    counts = []
+    for box_idx in range(len(all_boxes)):
+        if box_idx in box_map_data.box_to_points:
+            counts.append(len(box_map_data.box_to_points[box_idx]))
+        else:
+            counts.append(0)
+    counts = np.array(counts)
+
+    # Plot boxes colored by count
+    cmap = plt.cm.get_cmap(colormap)
+    max_count = np.max(counts) if np.max(counts) > 0 else 1
+
+    rects = []
+    colors = []
+
+    for box_idx, box in enumerate(all_boxes):
+        count = counts[box_idx]
+        color = cmap(count / max_count)
+
+        rect = Rectangle(
+            (box[0, 0], box[0, 1]),
+            box[1, 0] - box[0, 0],
+            box[1, 1] - box[0, 1],
+            facecolor=color,
+            edgecolor='gray',
+            linewidth=0.5,
+            alpha=0.7
+        )
+        rects.append(rect)
+        colors.append(color)
+
+    for rect in rects:
+        ax.add_patch(rect)
+
+    # Add colorbar
+    sm = plt.cm.ScalarMappable(cmap=cmap,
+                               norm=plt.Normalize(vmin=0, vmax=max_count))
+    plt.colorbar(sm, ax=ax, label='Number of data points')
+
+    ax.set_xlim(grid.bounds[0, 0], grid.bounds[1, 0])
+    ax.set_ylim(grid.bounds[0, 1], grid.bounds[1, 1])
+    ax.set_aspect('equal')
+    ax.set_title('Data Coverage per Box')
+
+def plot_data_points_overlay(grid: AbstractGrid, X: np.ndarray, Y: np.ndarray,
+                            ax: plt.Axes = None, max_arrows: int = 500):
+    """
+    Overlay data points (X as dots, Y as arrows) on grid (2D only).
+
+    Shows raw data distribution - user decides what it means.
+
+    :param grid: The grid
+    :param X: Input data points (N, 2)
+    :param Y: Output data points (N, 2)
+    :param ax: Matplotlib axes
+    :param max_arrows: Maximum number of arrows to plot (subsampled if exceeded)
+    """
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 6))
+
+    if X.shape[1] != 2:
+        raise ValueError("Overlay plot only supports 2D data")
+
+    # Plot grid boxes lightly
+    all_boxes = grid.get_boxes()
+    for box in all_boxes:
+        rect = Rectangle(
+            (box[0, 0], box[0, 1]),
+            box[1, 0] - box[0, 0],
+            box[1, 1] - box[0, 1],
+            facecolor='none',
+            edgecolor='lightgray',
+            linewidth=0.5
+        )
+        ax.add_patch(rect)
+
+    # Plot data: X points and X→Y arrows
+    ax.scatter(X[:, 0], X[:, 1], c='blue', s=10, alpha=0.5, label='X (current)')
+
+    # Subsample for arrows (too many arrows clutters)
+    n_arrows = min(max_arrows, len(X))
+    if n_arrows < len(X):
+        indices = np.random.choice(len(X), n_arrows, replace=False)
+    else:
+        indices = np.arange(len(X))
+
+    # Compute arrow scale
+    domain_size = np.max(grid.bounds[1] - grid.bounds[0])
+    arrow_head_width = domain_size * 0.02
+    arrow_head_length = domain_size * 0.02
+
+    for i in indices:
+        dx = Y[i, 0] - X[i, 0]
+        dy = Y[i, 1] - X[i, 1]
+        ax.arrow(X[i, 0], X[i, 1], dx, dy,
+                head_width=arrow_head_width, head_length=arrow_head_length,
+                fc='red', ec='red', alpha=0.3, linewidth=0.5)
+
+    ax.set_xlim(grid.bounds[0, 0], grid.bounds[1, 0])
+    ax.set_ylim(grid.bounds[0, 1], grid.bounds[1, 1])
+    ax.set_aspect('equal')
+    ax.set_title('Data Points and Transitions')
+    ax.legend()
