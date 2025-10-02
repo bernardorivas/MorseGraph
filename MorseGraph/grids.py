@@ -218,7 +218,12 @@ class UniformGrid(AbstractGrid):
 class AdaptiveGrid(AbstractGrid):
     """
     An adaptive grid that supports local refinement using a tree structure.
-    
+
+    .. warning::
+        EXPERIMENTAL: This class is under development and may not be fully
+        functional. Use UniformGrid for production work. See notebooks/4_adaptive_refinement.ipynb
+        for current status and known limitations.
+
     This implementation uses a tree-based approach where leaves represent
     active boxes. Supports efficient spatial indexing and neighbor finding.
     """

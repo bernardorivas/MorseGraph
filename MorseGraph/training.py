@@ -6,6 +6,7 @@ computation, and model saving for the autoencoder and latent dynamics models.
 '''
 
 import os
+from typing import Optional
 import torch
 from torch.utils.data import DataLoader
 

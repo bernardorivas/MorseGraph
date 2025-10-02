@@ -15,22 +15,31 @@ from MorseGraph.dynamics import BoxMapODE
 from MorseGraph.core import Model
 from MorseGraph.analysis import compute_morse_graph, compute_all_morse_set_basins
 from MorseGraph.plot import plot_morse_sets, plot_morse_graph, plot_basins_of_attraction
+from MorseGraph.systems import van_der_pol_ode
 
 # Set up output directory for figures
 output_dir = os.path.dirname(os.path.abspath(__file__))
 figures_dir = os.path.join(output_dir, "figures")
 
-def van_der_pol(t, x, mu=1.0):
-    """
-    Van der Pol oscillator.
+# =============================================================================
+# CONFIGURATION - Edit this section to customize the analysis
+# =============================================================================
 
-    Equations:
-        dx/dt = y
-        dy/dt = mu*(1 - x^2)*y - x
-    """
-    dxdt = x[1]
-    dydt = mu * (1 - x[0]**2) * x[1] - x[0]
-    return np.array([dxdt, dydt])
+# Domain and grid configuration
+DOMAIN = np.array([[-4.0, -4.0], [4.0, 4.0]])  # State space bounds
+GRID_RESOLUTION = 7  # Grid = 2^7 x 2^7 = 128 x 128 boxes
+
+# Dynamics configuration
+TAU = 2.0  # Integration time for ODE map
+EPSILON_BLOAT = 0.05  # Bloating factor for rigorous outer approximation
+
+# Van der Pol oscillator parameters (used by van_der_pol_ode from MorseGraph.systems)
+# mu = 1.0 (default parameter)
+
+# =============================================================================
+
+# Alias for compatibility with existing code
+van_der_pol = van_der_pol_ode
 
 def main():
     print("MorseGraph Example 3: ODEs (Van der Pol)")
@@ -40,19 +49,15 @@ def main():
     
     # 1. Set up the Morse Graph Computation
     print("\n1. Setting up Morse graph computation...")
-    
-    grid_res = 7
-    divisions = np.array([2**grid_res, 2**grid_res], dtype=int)
-    domain = np.array([[-4.0, -4.0], [4.0, 4.0]])
-    
-    tau = 2.0
-    dynamics = BoxMapODE(van_der_pol, tau=tau, epsilon=0.05)
-    
-    grid = UniformGrid(bounds=domain, divisions=divisions)
+
+    divisions = np.array([2**GRID_RESOLUTION, 2**GRID_RESOLUTION], dtype=int)
+    dynamics = BoxMapODE(van_der_pol, tau=TAU, epsilon=EPSILON_BLOAT)
+
+    grid = UniformGrid(bounds=DOMAIN, divisions=divisions)
     model = Model(grid, dynamics)
-    
+
     print(f"Created grid with {divisions[0]}x{divisions[1]} boxes")
-    print(f"Integration time tau: {tau}")
+    print(f"Integration time tau: {TAU}")
     
     # 2. Compute the BoxMap
     print("\n2. Computing BoxMap...")

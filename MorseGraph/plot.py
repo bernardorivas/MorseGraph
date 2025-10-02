@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Rectangle
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from typing import Dict, Set, FrozenSet
 
 from .grids import AbstractGrid
@@ -86,6 +87,123 @@ def plot_morse_sets(grid: AbstractGrid, morse_graph: nx.DiGraph, ax: plt.Axes = 
     ax.set_xlim(grid.bounds[0, 0], grid.bounds[1, 0])
     ax.set_ylim(grid.bounds[0, 1], grid.bounds[1, 1])
     ax.set_aspect('equal', adjustable='box')
+
+def plot_morse_sets_3d(grid: AbstractGrid, morse_graph: nx.DiGraph, ax: plt.Axes = None,
+                       box_map: nx.DiGraph = None, show_outside: bool = False, alpha: float = 0.3, **kwargs):
+    """
+    Plots the Morse sets on a 3D grid.
+
+    :param grid: The grid object used for the computation (must be 3D).
+    :param morse_graph: The Morse graph (NetworkX DiGraph) containing the Morse sets as nodes.
+                       Each node should have a 'color' attribute (assigned by compute_morse_graph).
+    :param ax: The matplotlib 3D axes to plot on. If None, a new figure and 3D axes are created.
+    :param box_map: The BoxMap (directed graph) from compute_box_map(). Required if show_outside=True.
+    :param show_outside: If True, paint boxes that map outside the domain in grey. Requires box_map.
+    :param alpha: Transparency level for the boxes (0.0-1.0). Lower values show more structure.
+    :param kwargs: Additional keyword arguments to pass to Poly3DCollection.
+    """
+    if grid.dim != 3:
+        raise ValueError(f"plot_morse_sets_3d requires a 3D grid, got {grid.dim}D")
+
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+
+    # Extract morse sets from the NetworkX graph
+    morse_sets = morse_graph.nodes()
+
+    # Get all boxes from the grid
+    all_boxes = grid.get_boxes()
+
+    def box_to_cuboid_faces(box):
+        """
+        Convert a box (shape (2, 3)) to the 8 vertices and 6 faces of a cuboid.
+        Returns a list of 6 faces, each face is a list of 4 vertices (x, y, z).
+        """
+        x_min, y_min, z_min = box[0]
+        x_max, y_max, z_max = box[1]
+
+        # Define 8 vertices
+        vertices = [
+            [x_min, y_min, z_min],
+            [x_max, y_min, z_min],
+            [x_max, y_max, z_min],
+            [x_min, y_max, z_min],
+            [x_min, y_min, z_max],
+            [x_max, y_min, z_max],
+            [x_max, y_max, z_max],
+            [x_min, y_max, z_max],
+        ]
+
+        # Define 6 faces (each face is a list of 4 vertex indices)
+        faces = [
+            [vertices[0], vertices[1], vertices[2], vertices[3]],  # bottom
+            [vertices[4], vertices[5], vertices[6], vertices[7]],  # top
+            [vertices[0], vertices[1], vertices[5], vertices[4]],  # front
+            [vertices[2], vertices[3], vertices[7], vertices[6]],  # back
+            [vertices[0], vertices[3], vertices[7], vertices[4]],  # left
+            [vertices[1], vertices[2], vertices[6], vertices[5]],  # right
+        ]
+
+        return faces
+
+    # Plot Morse sets
+    for morse_set in morse_sets:
+        # Get color from node attribute, fallback to tab10 if not present
+        if 'color' in morse_graph.nodes[morse_set]:
+            color = morse_graph.nodes[morse_set]['color']
+        else:
+            # Fallback for backward compatibility
+            num_sets = len(morse_sets)
+            cmap = cm.get_cmap('tab10')
+            color = cmap(list(morse_sets).index(morse_set) / max(num_sets, 10))
+
+        # Collect all faces for this Morse set
+        faces = []
+        for box_index in morse_set:
+            if box_index < len(all_boxes):
+                box = all_boxes[box_index]
+                faces.extend(box_to_cuboid_faces(box))
+
+        if faces:
+            # Create 3D polygon collection for this Morse set
+            poly3d = Poly3DCollection(faces, facecolors=color, alpha=alpha,
+                                     edgecolors='none', **kwargs)
+            ax.add_collection3d(poly3d)
+
+    # Optionally show boxes that map outside the domain
+    if show_outside and box_map is not None:
+        # Collect all boxes in Morse sets
+        morse_set_boxes = set()
+        for morse_set in morse_sets:
+            morse_set_boxes.update(morse_set)
+
+        # Find boxes with out_degree == 0 that are not in any Morse set
+        outside_boxes = set()
+        for node in box_map.nodes():
+            if box_map.out_degree(node) == 0 and node not in morse_set_boxes:
+                outside_boxes.add(node)
+
+        # Paint outside boxes grey
+        outside_faces = []
+        for box_index in outside_boxes:
+            if box_index < len(all_boxes):
+                box = all_boxes[box_index]
+                outside_faces.extend(box_to_cuboid_faces(box))
+
+        if outside_faces:
+            poly3d_outside = Poly3DCollection(outside_faces, facecolors='grey',
+                                             alpha=alpha * 0.5, edgecolors='none')
+            ax.add_collection3d(poly3d_outside)
+
+    # Set axis limits
+    ax.set_xlim(grid.bounds[0, 0], grid.bounds[1, 0])
+    ax.set_ylim(grid.bounds[0, 1], grid.bounds[1, 1])
+    ax.set_zlim(grid.bounds[0, 2], grid.bounds[1, 2])
+
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_zlabel('z')
 
 def plot_basins_of_attraction(grid: AbstractGrid, basins,
                              morse_graph: nx.DiGraph = None, ax: plt.Axes = None,
