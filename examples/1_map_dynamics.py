@@ -21,16 +21,29 @@ from MorseGraph.dynamics import BoxMapFunction
 from MorseGraph.core import Model
 from MorseGraph.analysis import compute_morse_graph, compute_all_morse_set_basins
 from MorseGraph.plot import plot_morse_sets, plot_morse_graph, plot_basins_of_attraction
+from MorseGraph.systems import henon_map
 
 # Set up output directory for figures
 output_dir = os.path.dirname(os.path.abspath(__file__))
 figures_dir = os.path.join(output_dir, "figures")
 
-def henon_map(x, a=1.4, b=0.3):
-    """Standard henon map"""
-    x_next = 1 - a * x[0]**2 + x[1]
-    y_next = b * x[0]
-    return np.array([x_next, y_next])
+# =============================================================================
+# CONFIGURATION - Edit this section to customize the analysis
+# =============================================================================
+
+# Domain and grid configuration
+DOMAIN = np.array([[-2.5, -0.5], [2.5, 0.5]])  # State space bounds
+GRID_RESOLUTION = 8  # Grid = 2^8 x 2^8 = 256 x 256 boxes
+
+# Dynamics configuration
+EPSILON_BLOAT = 0.01  # Bloating factor for rigorous outer approximation
+
+# Henon map parameters (used by henon_map from MorseGraph.systems)
+# a = 1.4, b = 0.3 (default parameters)
+
+# =============================================================================
+# Analysis
+# =============================================================================
 
 def main():
     print("MorseGraph Example 1: Map Dynamics")
@@ -38,23 +51,19 @@ def main():
     
     # 1. Set up the Dynamics and Grid
     print("\n1. Setting up dynamics and grid...")
-    
-    # Define the domain for the grid
-    domain = np.array([[-2.5, -0.5], [2.5, 0.5]])
-    
+
     # Create the dynamics object
-    dynamics = BoxMapFunction(henon_map, epsilon=0.01)
-    
+    dynamics = BoxMapFunction(henon_map, epsilon=EPSILON_BLOAT)
+
     # Create a grid
-    grid_x, grid_y = 8, 8
-    divisions = np.array([int(2**int(grid_x)), int(2**int(grid_y))], dtype=int)
-    grid = UniformGrid(bounds=domain, divisions=divisions)
+    divisions = np.array([2**GRID_RESOLUTION, 2**GRID_RESOLUTION], dtype=int)
+    grid = UniformGrid(bounds=DOMAIN, divisions=divisions)
     
     # Create the model
     model = Model(grid, dynamics)
     
     print(f"Created grid with {len(grid.get_boxes())} boxes")
-    print(f"Domain: {domain}")
+    print(f"Domain: {DOMAIN}")
     
     # 2. Compute the Morse Graph
     print("\n2. Computing Morse graph...")

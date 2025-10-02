@@ -26,19 +26,15 @@ from MorseGraph.dynamics import BoxMapData
 from MorseGraph.core import Model
 from MorseGraph.analysis import compute_morse_graph, compute_all_morse_set_basins
 from MorseGraph.plot import plot_morse_sets, plot_morse_graph, plot_data_coverage, plot_basins_of_attraction
+from MorseGraph.systems import van_der_pol_ode
+from MorseGraph.utils import generate_trajectory_data
 
 # =============================================================================
 # CONFIGURATION - Edit this section to change the system
 # =============================================================================
 
-# ODE Definition
-def vanderpol_ode(t, y, mu=1.0):
-    """Van der Pol: dx/dt = v, dv/dt = mu*(1-x^2)*v - x"""
-    x, v = y
-    return [v, mu * (1 - x**2) * v - x]
-
 # System configuration
-ODE_FUNCTION = vanderpol_ode          # ODE Function
+ODE_FUNCTION = van_der_pol_ode        # ODE Function (from MorseGraph.systems)
 ODE_PARAMS = {'mu': 1.0}              # ODE Parameters
 DOMAIN = np.array([[-4, -4], [4, 4]]) # State space (cubical domain)
 GRID_DIVISIONS = [128, 128]           # Grid resolution
@@ -55,58 +51,6 @@ N_POINTS_PER_TRAJECTORY = 10          # Number of time steps to force in integra
 
 # Random seed
 RANDOM_SEED = 42
-
-# =============================================================================
-# Trajectory Generation
-# =============================================================================
-
-def generate_trajectory_data(ode_func, ode_params, n_samples, total_time,
-                            n_points, sampling_domain, random_seed=42):
-    """
-    Generate trajectory data from ODE by sampling random initial conditions.
-
-    :param ode_func: ODE function with signature f(t, y, **params)
-    :param ode_params: Dictionary of parameters to pass to ode_func
-    :param n_samples: Number of random initial conditions
-    :param total_time: Total integration time per trajectory
-    :param n_points: Number of points to extract per trajectory
-    :param sampling_domain: Domain to sample initial conditions from (2, D)
-    :param random_seed: Random seed for reproducibility
-    :return: (X, Y) where X[i] -> Y[i] after dt = total_time/n_points
-    """
-    np.random.seed(random_seed)
-    dim = sampling_domain.shape[1]
-
-    # Sample random initial conditions
-    initial_conditions = np.random.uniform(
-        sampling_domain[0],
-        sampling_domain[1],
-        (n_samples, dim)
-    )
-
-    X = []
-    Y = []
-    dt = total_time / (n_points - 1)
-
-    for ic in initial_conditions:
-        # Integrate ODE
-        sol = solve_ivp(
-            lambda t, y: ode_func(t, y, **ode_params),
-            [0, total_time],
-            ic,
-            dense_output=True
-        )
-
-        # Extract n_points uniformly spaced along trajectory
-        times = np.linspace(0, total_time, n_points)
-        trajectory = sol.sol(times).T
-
-        # Create (X, Y) pairs: X[i] -> Y[i+1]
-        for i in range(len(trajectory) - 1):
-            X.append(trajectory[i])
-            Y.append(trajectory[i + 1])
-
-    return np.array(X), np.array(Y)
 
 # =============================================================================
 # Analysis
@@ -131,7 +75,7 @@ def main():
     print(f"   Total time: {TOTAL_TIME}")
     print(f"   Points per trajectory: {N_POINTS_PER_TRAJECTORY}")
 
-    X, Y = generate_trajectory_data(
+    X, Y, _ = generate_trajectory_data(
         ODE_FUNCTION,
         ODE_PARAMS,
         N_SAMPLES,

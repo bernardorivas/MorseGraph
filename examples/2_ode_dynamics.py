@@ -24,43 +24,53 @@ from MorseGraph.dynamics import BoxMapODE
 from MorseGraph.core import Model
 from MorseGraph.analysis import compute_morse_graph, compute_all_morse_set_basins
 from MorseGraph.plot import plot_morse_sets, plot_morse_graph, plot_basins_of_attraction
+from MorseGraph.systems import toggle_switch_ode
 
 # Set up output directory for figures
 output_dir = os.path.dirname(os.path.abspath(__file__))
 figures_dir = os.path.join(output_dir, "figures")
 
-def toggle_switch(t, x, alpha1=5.0, alpha2=5.0, beta=1.0, n=2.0):
-    """
-    Toggle switch: Models two genes that mutually inhibit each other's expression.
+# =============================================================================
+# CONFIGURATION - Edit this section to customize the analysis
+# =============================================================================
 
-    Equations:
-        dx/dt = alpha1/(1 + y^n) - beta*x
-        dy/dt = alpha2/(1 + x^n) - beta*y
+# Domain and grid configuration
+DOMAIN = np.array([[0.0, 0.0], [6.0, 6.0]])  # State space bounds
+GRID_RESOLUTION = 7  # Grid = (2^7-1) x (2^7-1) boxes
 
-    Parameters:
-        alpha1, alpha2: Maximum production rates for genes x and y
-        beta: Degradation rate for both genes
-        n: Hill coefficient
-    """
-    dxdt = alpha1 / (1 + x[1]**n) - beta * x[0]
-    dydt = alpha2 / (1 + x[0]**n) - beta * x[1]
-    return np.array([dxdt, dydt])
+# Dynamics configuration
+TAU = 5.0  # Integration time for ODE map
 
-def main(show_phase_portrait=False):
+# Visualization configuration
+SHOW_PHASE_PORTRAIT = False  # Set to True to generate phase portrait plot
+VECTOR_FIELD_RESOLUTION = 20  # Grid resolution for vector field visualization
+N_SAMPLE_TRAJECTORIES = 5  # Number of sample trajectories in phase portrait
+TRAJECTORY_TIME = 3.0  # Integration time for sample trajectories
+RANDOM_SEED = 42  # For reproducible trajectory generation
+
+# Toggle switch ODE parameters (used by toggle_switch_ode from MorseGraph.systems)
+# Default parameters are used in the system definition
+
+# =============================================================================
+
+# Alias for compatibility with existing code
+toggle_switch = toggle_switch_ode
+
+def main():
     print("MorseGraph Example 2: ODEs")
     print("=======================================")
-    
+
     # Ensure figures directory exists
     os.makedirs(figures_dir, exist_ok=True)
-    
+
     # 1. Define the ODE System and optionally visualize
     print("\n1. Defining the ODE system...")
-    
+
     # Create vector field for visualization (always compute for overlay)
-    x_vec = np.linspace(0, 6, 20)
-    y_vec = np.linspace(0, 6, 20)
+    x_vec = np.linspace(DOMAIN[0, 0], DOMAIN[1, 0], VECTOR_FIELD_RESOLUTION)
+    y_vec = np.linspace(DOMAIN[0, 1], DOMAIN[1, 1], VECTOR_FIELD_RESOLUTION)
     x, y = np.meshgrid(x_vec, y_vec)
-    
+
     # Compute vector field
     u = np.zeros_like(x)
     v = np.zeros_like(y)
@@ -69,26 +79,28 @@ def main(show_phase_portrait=False):
             derivatives = toggle_switch(0, np.array([x[i,j], y[i,j]]))
             u[i,j] = derivatives[0]
             v[i,j] = derivatives[1]
-    
+
     # Normalize vector field for better visualization
     magnitude = np.sqrt(u**2 + v**2)
     magnitude = np.where(magnitude == 0, 1, magnitude)
     u_norm = u / magnitude
     v_norm = v / magnitude
 
-    if show_phase_portrait:
+    if SHOW_PHASE_PORTRAIT:
         # Plot vector field with sample trajectories
         plt.figure(figsize=(10, 8))
         plt.quiver(x, y, u_norm, v_norm, color='blue', alpha=0.5, scale=40, width=0.002)
         
         
-        # Generate 5 random initial conditions
-        np.random.seed(42)  # For reproducible results
-        initial_conditions = np.random.uniform(low=[0.5, 0.5], high=[5.5, 5.5], size=(5, 2))
-        
+        # Generate random initial conditions
+        np.random.seed(RANDOM_SEED)  # For reproducible results
+        low = DOMAIN[0] + 0.5
+        high = DOMAIN[1] - 0.5
+        initial_conditions = np.random.uniform(low=low, high=high, size=(N_SAMPLE_TRAJECTORIES, 2))
+
         # Integrate and plot trajectories
-        t_span = (0, 3.0)  # Integration time
-        t_eval = np.linspace(0, 3.0, 300)
+        t_span = (0, TRAJECTORY_TIME)  # Integration time
+        t_eval = np.linspace(0, TRAJECTORY_TIME, 300)
         
         colors = ['red', 'green', 'orange', 'purple', 'brown']
         
@@ -115,8 +127,8 @@ def main(show_phase_portrait=False):
         plt.grid(True, alpha=0.3)
 
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        plt.xlim(0, 6)
-        plt.ylim(0, 6)
+        plt.xlim(DOMAIN[0, 0], DOMAIN[1, 0])
+        plt.ylim(DOMAIN[0, 1], DOMAIN[1, 1])
         
         # Save plot
         trajectory_plot_path = os.path.join(figures_dir, "2_bistable_trajectories.png")
@@ -126,25 +138,22 @@ def main(show_phase_portrait=False):
     
     # 2. Set up the Morse Graph Computation
     print("\n2. Setting up Morse graph computation...")
-    
+
     # Define the grid parameters
-    grid_x, grid_y = 7, 7
-    divisions = np.array([int(2**grid_x-1), int(2**grid_y-1)], dtype=int)
-    domain = np.array([[0.0, 0.0], [6.0, 6.0]])
-    
+    divisions = np.array([2**GRID_RESOLUTION - 1, 2**GRID_RESOLUTION - 1], dtype=int)
+
     # Create the dynamics object for our ODE
-    tau = 5.0
-    dynamics = BoxMapODE(toggle_switch,tau)
-    
+    dynamics = BoxMapODE(toggle_switch, TAU)
+
     # Create the grid
-    grid = UniformGrid(bounds=domain, divisions=divisions)
+    grid = UniformGrid(bounds=DOMAIN, divisions=divisions)
     
     # Create the model
     model = Model(grid, dynamics)
     
     print(f"Created grid with {divisions[0]}x{divisions[1]} boxes")
-    print(f"Integration time tau: {tau}")
-    print(f"Domain: {domain}")
+    print(f"Integration time tau: {TAU}")
+    print(f"Domain: {DOMAIN}")
     
     # 3. Compute the BoxMap
     print("\n3. Computing BoxMap...")

@@ -702,150 +702,144 @@ class BoxMapODE(Dynamics):
         return np.array([min_bounds, max_bounds])
 
 
-class LearnedMapDynamics(Dynamics):
-    """
-    A dynamical system defined by a learned function in latent space.
-    
-    This class wraps a learned dynamics model (implementing AbstractLatentDynamics)
-    into the rigorous BoxMap framework. The dynamics operate entirely in the latent
-    space - the associated grid must also be defined in the latent space dimensions.
-    """
-    
-    def __init__(self, dynamics_model, bloating: float = 1e-6):
-        """
-        :param dynamics_model: Any model implementing AbstractLatentDynamics interface
-                              (has predict method)
-        :param bloating: Epsilon expansion factor for outer approximation
-        """
-        # Check if the model has the expected interface
-        if not hasattr(dynamics_model, 'predict'):
-            raise ValueError("dynamics_model must have a 'predict' method")
-        
-        self.dynamics_model = dynamics_model
-        self.epsilon = bloating
-    
-    def __call__(self, latent_box: np.ndarray) -> np.ndarray:
-        """
-        Apply learned dynamics to a box in latent space.
-        
-        :param latent_box: A numpy array of shape (2, D) representing bounds 
-                          in the D-dimensional latent space
-        :return: Bounding box of the image under learned dynamics
-        """
-        dim = latent_box.shape[1]
-        
-        # Sample points from the latent box (corners and center)
-        corner_points = list(itertools.product(*zip(latent_box[0], latent_box[1])))
-        center_point = (latent_box[0] + latent_box[1]) / 2
-        sample_points = np.array(corner_points + [center_point])
-        
-        # Apply the learned dynamics
-        image_points = self.dynamics_model.predict(sample_points)
-        
-        # Compute bounding box of image points
-        min_bounds = np.min(image_points, axis=0)
-        max_bounds = np.max(image_points, axis=0)
-        
-        # Apply bloating for outer approximation
-        min_bounds -= self.epsilon
-        max_bounds += self.epsilon
-        
-        return np.array([min_bounds, max_bounds])
+# =============================================================================
+# Machine Learning-Based Dynamics (Optional PyTorch Dependency)
+# =============================================================================
 
+try:
+    import torch
 
-class LinearMapDynamics(Dynamics):
-    """
-    Optimized dynamics for linear models (e.g., from DMD).
-    
-    Since linear dynamics are defined by a matrix A (Z_next = A @ Z_current),
-    we can optimize by only mapping the corners of the input box.
-    """
-    
-    def __init__(self, linear_matrix: np.ndarray, bloating: float = 1e-6):
+    class BoxMapLearnedLatent(Dynamics):
         """
-        :param linear_matrix: The linear transformation matrix A of shape (D, D)
-        :param bloating: Epsilon expansion factor for outer approximation
-        """
-        self.A = linear_matrix
-        self.epsilon = bloating
-    
-    def __call__(self, latent_box: np.ndarray) -> np.ndarray:
-        """
-        Apply linear dynamics to a box in latent space.
-        
-        For linear dynamics Z_next = A @ Z, we only need to map the corners
-        since the image of a box under linear transformation is determined
-        by the images of its corners.
-        
-        :param latent_box: Box in latent space of shape (2, D)
-        :return: Bounding box of the image under linear dynamics
-        """
-        dim = latent_box.shape[1]
-        
-        # Generate all corners of the box
-        corner_points = list(itertools.product(*zip(latent_box[0], latent_box[1])))
-        corner_points = np.array(corner_points)
-        
-        # Apply linear transformation: image = A @ corners.T
-        image_points = (self.A @ corner_points.T).T
-        
-        # Compute bounding box
-        min_bounds = np.min(image_points, axis=0)
-        max_bounds = np.max(image_points, axis=0)
-        
-        # Apply bloating
-        min_bounds -= self.epsilon
-        max_bounds += self.epsilon
-        
-        return np.array([min_bounds, max_bounds])
+        Learned latent dynamics using PyTorch model G: ℝᵈ → ℝᵈ.
 
+        This class enables the use of neural network-based latent dynamics
+        in the MorseGraph framework. It applies a learned function G to
+        boxes in latent space, computing rigorous outer approximations
+        through sampling and bloating.
+        """
 
-class GridDilatedDynamics(Dynamics):
-    """
-    A wrapper that applies grid dilation for rigorous outer approximation.
-    
-    This class implements the "Grid Dilation" strategy by expanding results
-    in discrete grid space rather than continuous phase space.
-    """
-    
-    def __init__(self, base_dynamics: Dynamics, grid, dilation_radius: int = 1):
-        """
-        :param base_dynamics: The underlying dynamics to wrap
-        :param grid: The AbstractGrid instance used for discretization
-        :param dilation_radius: Number of neighboring layers to include
-        """
-        self.base_dynamics = base_dynamics
-        self.grid = grid
-        self.radius = dilation_radius
-    
-    def __call__(self, box: np.ndarray) -> np.ndarray:
-        """
-        Apply base dynamics and then dilate the result in grid space.
-        
-        :param box: Input box in phase space
-        :return: Union of boxes after grid dilation
-        """
-        # 1. Apply base dynamics to get target box
-        target_box = self.base_dynamics(box)
-        
-        # 2. Find grid indices that intersect with target box
-        target_indices = self.grid.box_to_indices(target_box)
-        
-        # 3. Apply grid dilation to expand the indices
-        dilated_indices = self.grid.dilate_indices(target_indices, self.radius)
-        
-        # 4. Get all boxes corresponding to dilated indices
-        if len(dilated_indices) == 0:
-            return target_box  # Return original if no valid indices
-            
-        all_boxes = self.grid.get_boxes()
-        dilated_boxes = all_boxes[dilated_indices]
-        
-        # 5. Compute the union bounding box of all dilated boxes
-        all_min_bounds = dilated_boxes[:, 0, :]  # Shape: (n_boxes, dim)
-        all_max_bounds = dilated_boxes[:, 1, :]
-        
-        union_min = np.min(all_min_bounds, axis=0)
-        union_max = np.max(all_max_bounds, axis=0)
-        
-        return np.array([union_min, union_max])
+        def __init__(self, latent_dynamics_model, decoder_model=None, encoder_model=None,
+                     device=None, epsilon_bloat=None):
+            """
+            Args:
+                latent_dynamics_model: Trained G (LatentDynamics model)
+                decoder_model: Trained D (Decoder), optional for debugging
+                encoder_model: Trained E (Encoder), optional for debugging
+                device: torch device (if None, uses 'cuda' if available else 'cpu')
+                epsilon_bloat: Bloating radius for rigorous outer approximation
+            """
+            self.G = latent_dynamics_model
+            self.D = decoder_model
+            self.E = encoder_model
+
+            if device is None:
+                self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            else:
+                self.device = device
+
+            self.epsilon_bloat = epsilon_bloat
+
+        def __call__(self, box: np.ndarray) -> np.ndarray:
+            """
+            Compute image of box under learned latent dynamics G.
+
+            Args:
+                box: numpy array of shape (2, D) representing [min, max] in D dimensions
+
+            Returns:
+                numpy array of shape (2, D) representing image bounds
+            """
+            # Strategy: Sample corners + center + edge midpoints, apply G, compute bounding box
+            # Then bloat by epsilon_bloat for rigorous outer approximation
+
+            dim = box.shape[1]
+
+            # Generate sample points from the box
+            # For D dimensions: 2^D corners + 1 center + 2D edge midpoints
+            sample_points = self._sample_box_points(box)
+
+            # Convert to tensor and apply model
+            sample_tensor = torch.FloatTensor(sample_points).to(self.device)
+            with torch.no_grad():
+                image_points_tensor = self.G(sample_tensor)
+            image_points = image_points_tensor.cpu().numpy()
+
+            # Compute bounding box of the image points
+            min_bounds = np.min(image_points, axis=0)
+            max_bounds = np.max(image_points, axis=0)
+
+            # Enlarge the bounding box by epsilon_bloat
+            if self.epsilon_bloat is not None:
+                if isinstance(self.epsilon_bloat, np.ndarray):
+                    # Per-dimension bloating
+                    min_bounds -= self.epsilon_bloat
+                    max_bounds += self.epsilon_bloat
+                else:
+                    # Uniform bloating
+                    min_bounds -= self.epsilon_bloat
+                    max_bounds += self.epsilon_bloat
+
+            return np.array([min_bounds, max_bounds])
+
+        def _sample_box_points(self, box: np.ndarray) -> np.ndarray:
+            """
+            Sample representative points from a box.
+
+            Samples corners, center, and edge midpoints for good coverage.
+
+            Args:
+                box: Array of shape (2, D)
+
+            Returns:
+                Array of shape (n_samples, D) where n_samples = 2^D + 1 + 2D
+            """
+            dim = box.shape[1]
+
+            if dim == 2:
+                # 2D case: 4 corners + 1 center + 4 edge midpoints
+                corners = np.array([
+                    [box[0, 0], box[0, 1]],
+                    [box[1, 0], box[0, 1]],
+                    [box[0, 0], box[1, 1]],
+                    [box[1, 0], box[1, 1]]
+                ])
+
+                center = (box[0] + box[1]) / 2.0
+
+                edge_midpoints = np.array([
+                    [center[0], box[0, 1]],
+                    [center[0], box[1, 1]],
+                    [box[0, 0], center[1]],
+                    [box[1, 0], center[1]]
+                ])
+
+                return np.vstack([corners, center.reshape(1, -1), edge_midpoints])
+
+            else:
+                # General D-dimensional case
+                # Generate all corners (2^D points)
+                corner_indices = list(itertools.product([0, 1], repeat=dim))
+                corners = np.array([[box[idx[i], i] for i in range(dim)] for idx in corner_indices])
+
+                # Center point
+                center = (box[0] + box[1]) / 2.0
+
+                # Edge midpoints: vary one coordinate, keep others at center
+                edge_midpoints = []
+                for d in range(dim):
+                    for extreme in [0, 1]:
+                        point = center.copy()
+                        point[d] = box[extreme, d]
+                        edge_midpoints.append(point)
+
+                return np.vstack([corners, center.reshape(1, -1), np.array(edge_midpoints)])
+
+except ImportError:
+    # If torch is not installed, create a dummy class
+    class BoxMapLearnedLatent:
+        def __init__(self, *args, **kwargs):
+            raise ImportError(
+                "PyTorch is required for BoxMapLearnedLatent. "
+                "Please install it via `pip install torch` or `pip install morsegraph[ml]`."
+            )

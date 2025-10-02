@@ -28,10 +28,18 @@ from scipy.spatial import cKDTree
 
 # MorseGraph imports
 from MorseGraph.grids import UniformGrid
-from MorseGraph.dynamics import Dynamics, BoxMapODE
+from MorseGraph.dynamics import BoxMapODE, BoxMapLearnedLatent
 from MorseGraph.core import Model
 from MorseGraph.analysis import compute_morse_graph
-from MorseGraph.plot import plot_morse_graph, plot_morse_sets
+from MorseGraph.plot import plot_morse_graph, plot_morse_sets, plot_morse_sets_3d
+from MorseGraph.systems import lorenz_ode
+from MorseGraph.utils import (
+    generate_trajectory_data,
+    save_trajectory_data,
+    load_trajectory_data,
+    compute_latent_bounds,
+    filter_boxes_near_data
+)
 
 
 # ML dependencies - check availability
@@ -39,6 +47,7 @@ try:
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader, TensorDataset
+    from MorseGraph.models import Encoder, Decoder, LatentDynamics
     ML_AVAILABLE = True
 except ImportError:
     print("PyTorch not available. This example requires PyTorch for ML functionality.")
@@ -59,11 +68,11 @@ class Config:
     '''Configuration parameters for the learned dynamics example.'''
     # --- Training Control ---
     FORCE_RETRAIN = False
-    NUM_EPOCHS = 500
+    NUM_EPOCHS = 300
     RANDOM_SEED = 42
 
     # --- Data Generation (Lorenz System) ---
-    N_TRAJECTORIES = 5000
+    N_TRAJECTORIES = 1000
     TOTAL_TIME = 10.0
     N_POINTS = 11  # Number of points per trajectory
     DOMAIN_BOUNDS = [[-20, -30, 5], [20, 30, 50]]
@@ -78,312 +87,23 @@ class Config:
     LEARNING_RATE = 0.001
     # Loss weights
     W_RECON = 1.0
-    W_DYN_RECON = 2.0
+    W_DYN_RECON = 5.0
     W_DYN_CONS = 1.0
 
     # --- MorseGraph Computation ---
-    # For true Lorenz system
+    # For Lorenz system
     LORENZ_GRID_DIVISIONS = [32, 32, 32]
     LORENZ_EPSILON_BLOAT = 0.1
     # For learned latent system
     LATENT_GRID_DIVISIONS = [256, 256]
     LATENT_BOUNDS_PADDING = 1.5
-    DATA_RESTRICTION_EPSILON_FACTOR = 1.5  # Multiplier for cell diagonal
-
-
-# ============================================================================
-# Neural Network Models - same structure as MORALS
-# ============================================================================
-class Encoder(nn.Module):
-    """Encoder: X (3D) → Y (2D)"""
-    def __init__(self, input_dim=3, latent_dim=2, hidden_dim=64):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, latent_dim)
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
-
-class Decoder(nn.Module):
-    """Decoder: Y (2D) → X (3D)"""
-    def __init__(self, latent_dim=2, output_dim=3, hidden_dim=64):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(latent_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim)
-        )
-
-    def forward(self, y):
-        return self.net(y)
-
-
-class LatentDynamics(nn.Module):
-    """Latent Dynamics: Y (2D) → Y (2D)"""
-    def __init__(self, latent_dim=2, hidden_dim=64):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(latent_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, latent_dim)
-        )
-
-    def forward(self, y):
-        return self.net(y)
-
-
-class BoxMapLearnedLatent(Dynamics):
-    """Learned latent dynamics using PyTorch model G: ℝ² → ℝ²"""
-
-    def __init__(self, latent_dynamics_model, decoder_model, encoder_model,
-                 device, epsilon_bloat=None):
-        """
-        Args:
-            latent_dynamics_model: Trained G (LatentDynamics)
-            decoder_model: Trained D (Decoder)
-            encoder_model: Trained E (Encoder)
-            device: torch device
-            epsilon_bloat: Bloating radius for rigorous outer approximation
-        """
-        self.G = latent_dynamics_model
-        self.D = decoder_model  
-        self.E = encoder_model
-        self.device = device
-        self.epsilon_bloat = epsilon_bloat
-
-    def __call__(self, box: np.ndarray) -> np.ndarray:
-        """
-        Compute image of box under learned latent dynamics G.
-
-        Args:
-            box: numpy array of shape (2, 2) representing [min, max] in 2D
-
-        Returns:
-            numpy array of shape (2, 2) representing image bounds
-        """
-        # Strategy: Sample corners + center + edge midpoints, apply G, compute a bounding box
-        # Then bloat by epsilon_bloat for 'rigorous' outer approximation
-
-        # Generate corner points of the box (2D: 4 corners)
-        corners = np.array([
-            [box[0, 0], box[0, 1]],
-            [box[1, 0], box[0, 1]],
-            [box[0, 0], box[1, 1]],
-            [box[1, 0], box[1, 1]]
-        ])
-
-        # Center point
-        center = (box[0] + box[1]) / 2.0
-
-        # Edge midpoints
-        edge_midpoints = np.array([
-            [center[0], box[0, 1]],
-            [center[0], box[1, 1]],
-            [box[0, 0], center[1]],
-            [box[1, 0], center[1]]
-        ])
-
-        sample_points = np.vstack([corners, center.reshape(1, -1), edge_midpoints])
-        
-        # Convert to tensor and apply model
-        sample_tensor = torch.FloatTensor(sample_points).to(self.device)
-        with torch.no_grad():
-            image_points_tensor = self.G(sample_tensor)
-        image_points = image_points_tensor.cpu().numpy()
-
-        # Compute bounding box of the image points
-        min_bounds = np.min(image_points, axis=0)
-        max_bounds = np.max(image_points, axis=0)
-
-        # Enlarge the bounding box slightly
-        if self.epsilon_bloat is not None:
-            min_bounds -= self.epsilon_bloat
-            max_bounds += self.epsilon_bloat
-
-        return np.array([min_bounds, max_bounds])
+    DATA_RESTRICTION_EPSILON_FACTOR = 1.5
 
 # ============================================================================
-# Lorenz System
+# Visualization Functions
 # ============================================================================
-
-def lorenz_ode(t, state, sigma=10.0, rho=28.0, beta=8.0/3.0):
-    """Lorenz system differential equations."""
-    x, y, z = state
-    dx_dt = sigma * (y - x)
-    dy_dt = x * (rho - z) - y
-    dz_dt = x * y - beta * z
-    return [dx_dt, dy_dt, dz_dt]
-
-
-def generate_trajectory_data(n_trajectories=1000, total_time=10.0, n_points=11,
-                            domain_bounds=None, sigma=10.0, rho=28.0, beta=8.0/3.0,
-                            random_seed=42):
-    """
-    Generate trajectory data from Lorenz system by sampling random initial conditions
-    and integrating forward in time.
-
-    :param n_trajectories: Number of trajectories to generate
-    :param total_time: Total integration time per trajectory
-    :param n_points: Number of points to extract per trajectory (uniformly spaced)
-    :param domain_bounds: Domain to sample initial conditions from [[x_min, y_min, z_min], [x_max, y_max, z_max]]
-    :param sigma, rho, beta: Lorenz system parameters
-    :param random_seed: Random seed for reproducibility
-    :return: (X, Y, trajectories) where X[i] -> Y[i] after dt = total_time/(n_points-1),
-             and trajectories is list of full trajectory arrays for visualization
-    """
-    if domain_bounds is None:
-        domain_bounds = [[-20, -30, 5], [20, 30, 50]]
-
-    np.random.seed(random_seed)
-
-    x_min = np.array(domain_bounds[0])
-    x_max = np.array(domain_bounds[1])
-
-    X = []
-    Y = []
-    trajectories = []
-
-    print(f"  Generating {n_trajectories} trajectories with {n_points} points each...")
-
-    for i in range(n_trajectories):
-        if (i + 1) % 100 == 0:
-            print(f"    Progress: {i+1}/{n_trajectories}")
-
-        # Random initial condition
-        ic = np.random.uniform(x_min, x_max)
-
-        # Integrate ODE
-        sol = solve_ivp(
-            lambda t, y: lorenz_ode(t, y, sigma, rho, beta),
-            [0, total_time],
-            ic,
-            dense_output=True,
-            method='DOP853',
-            rtol=1e-12,
-            atol=1e-14
-        )
-
-        # Extract n_points uniformly spaced along trajectory
-        times = np.linspace(0, total_time, n_points)
-        trajectory = sol.sol(times).T  # Shape: (n_points, 3)
-
-        # Store full trajectory for visualization
-        trajectories.append(trajectory)
-
-        # Create (X, Y) pairs: X[i] -> Y[i+1]
-        for j in range(len(trajectory) - 1):
-            X.append(trajectory[j])
-            Y.append(trajectory[j + 1])
-
-    return np.array(X), np.array(Y), trajectories
-
-
-def save_trajectory_data(filepath, x_t, x_t_plus_1, trajectories, metadata):
-    """Save trajectory data to disk."""
-    # Convert trajectories list to a format that can be saved
-    # Save each trajectory with its index
-    save_dict = {
-        'x_t': x_t,
-        'x_t_plus_1': x_t_plus_1,
-        'n_trajectories': len(trajectories),
-        **metadata
-    }
-
-    # Save trajectories as separate arrays
-    for i, traj in enumerate(trajectories):
-        save_dict[f'trajectory_{i}'] = traj
-
-    np.savez_compressed(filepath, **save_dict)
-    print(f"  Saved training data to: {filepath}")
-
-
-def load_trajectory_data(filepath):
-    """Load trajectory data from disk."""
-    data = np.load(filepath)
-
-    x_t = data['x_t']
-    x_t_plus_1 = data['x_t_plus_1']
-    n_trajectories = int(data['n_trajectories'])
-
-    # Reconstruct trajectories list
-    trajectories = []
-    for i in range(n_trajectories):
-        trajectories.append(data[f'trajectory_{i}'])
-
-    # Extract metadata
-    metadata = {
-        'n_trajectories': n_trajectories,
-        'total_time': float(data['total_time']),
-        'n_points': int(data['n_points']),
-        'random_seed': int(data['random_seed'])
-    }
-
-    print(f"  Loaded training data from: {filepath}")
-    print(f"  Metadata: {n_trajectories} trajectories, {metadata['n_points']} points each")
-
-    return x_t, x_t_plus_1, trajectories, metadata
-
-
-def compute_latent_bounds(encoded_data, padding_factor=1.2):
-    """
-    Compute bounding box for latent space with padding.
-
-    Args:
-        encoded_data: numpy array (N, 2)
-        padding_factor: expand bounds by this factor
-
-    Returns:
-        bounds: array of shape (2, 2) for [[xmin, ymin], [xmax, ymax]]
-    """
-    mins = encoded_data.min(axis=0)
-    maxs = encoded_data.max(axis=0)
-
-    center = (mins + maxs) / 2
-    range_vec = (maxs - mins) * padding_factor / 2
-
-    return np.array([center - range_vec, center + range_vec])
-
-
-def filter_boxes_near_data(grid, encoded_data, epsilon_radius):
-    """
-    Return list of box indices that contain or are epsilon-close to encoded data.
-
-    Uses cKDTree for efficient spatial queries.
-    """
-    tree = cKDTree(encoded_data)
-    active_boxes = []
-
-    # Get all box centers
-    all_boxes = grid.get_boxes()
-    box_centers = (all_boxes[:, 0, :] + all_boxes[:, 1, :]) / 2.0
-
-    # Query the tree for all box centers at once
-    distances, _ = tree.query(box_centers, k=1)
-
-    # Find active boxes where distance is within the radius
-    active_indices = np.where(distances <= epsilon_radius)[0]
-    
-    return active_indices.tolist()
-
-
 def create_morsegraph_comparison_figure(
-    lorenz_morse_graph,
+    lorenz_morse_graph, lorenz_grid, lorenz_box_map,
     latent_morse_graph_full, latent_box_map_full, latent_grid_full,
     latent_morse_graph_restricted, latent_box_map_restricted, restricted_active_boxes,
     encoded_train_data,
@@ -414,18 +134,19 @@ def create_morsegraph_comparison_figure(
     ax3.axis('off')
 
     # Bottom row: Morse sets
-    ax4 = plt.subplot(2, 3, 4)
-    ax4.text(0.5, 0.5, '😊\n3D Morse Sets\nvisualization\nnot yet implemented',
-             ha='center', va='center', fontsize=16, backgroundcolor='#f0f0f0')
+    ax4 = plt.subplot(2, 3, 4, projection='3d')
+    if lorenz_morse_graph is not None and lorenz_grid is not None:
+        plot_morse_sets_3d(lorenz_grid, lorenz_morse_graph, ax=ax4,
+                          box_map=lorenz_box_map, alpha=0.5)
     ax4.set_title('Morse Sets: Lorenz (3D)')
-    ax4.axis('off')
+    ax4.view_init(elev=20, azim=45)
 
     ax5 = plt.subplot(2, 3, 5)
     if latent_morse_graph_full is not None:
         plot_morse_sets(latent_grid_full, latent_morse_graph_full,
                         box_map=latent_box_map_full, ax=ax5)
     if encoded_train_data is not None:
-        ax5.scatter(encoded_train_data[:, 0], encoded_train_data[:, 1], s=1, c='black', alpha=0.2, zorder=3)
+        ax5.scatter(encoded_train_data[:, 0], encoded_train_data[:, 1], s=1, c='blue', alpha=0.2, zorder=3, rasterized=True)
     ax5.set_title('Morse Sets: in $R^2$')
     ax5.set_aspect('auto', adjustable='box')
 
@@ -451,7 +172,7 @@ def create_morsegraph_comparison_figure(
         plot_morse_sets(latent_grid_full, latent_morse_graph_restricted,
                         box_map=latent_box_map_restricted, ax=ax6)
     if encoded_train_data is not None:
-        ax6.scatter(encoded_train_data[:, 0], encoded_train_data[:, 1], s=1, c='black', alpha=0.2, zorder=3)
+        ax6.scatter(encoded_train_data[:, 0], encoded_train_data[:, 1], s=1, c='blue', alpha=0.2, zorder=3, rasterized=True)
     ax6.set_title('Morse Sets: Restricted to E(X)')
     ax6.set_aspect('auto', adjustable='box')
 
@@ -480,8 +201,8 @@ def main():
     # Set to True to force retraining even if cached models exist.
     # The number of epochs is included in the filename, so changing it will
     # also trigger retraining.
-    force_retrain = False
-    num_epochs = 500  # Epochs to train for
+    force_retrain = Config.FORCE_RETRAIN
+    num_epochs = Config.NUM_EPOCHS
 
     # Define model cache paths
     model_cache_dir = os.path.join(data_dir, "learned_models")
@@ -492,22 +213,22 @@ def main():
     # --- End Configuration ---
 
     # MorseGraph computation parameters
-    LORENZ_GRID_DIVISIONS = [32, 32, 32]  # 3D grid for Lorenz
-    LORENZ_EPSILON_BLOAT = 0.1
+    LORENZ_GRID_DIVISIONS = Config.LORENZ_GRID_DIVISIONS
+    LORENZ_EPSILON_BLOAT = Config.LORENZ_EPSILON_BLOAT
 
-    LATENT_GRID_DIVISIONS = [256, 256]  # 2D grid for latent space
-    LATENT_BOUNDS_PADDING = 1.5  # Expand bounds by 50%
+    LATENT_GRID_DIVISIONS = Config.LATENT_GRID_DIVISIONS
+    LATENT_BOUNDS_PADDING = Config.LATENT_BOUNDS_PADDING
 
     loss_plot_path = None
 
     # 1. Load or Generate Training Data
     print("\n1. Loading/generating training data from Lorenz trajectories...")
 
-    domain_bounds = [[-20, -30, 5], [20, 30, 50]]
-    n_trajectories = 5000
-    total_time = 10.0
-    n_points = 11
-    random_seed = 42
+    domain_bounds = Config.DOMAIN_BOUNDS
+    n_trajectories = Config.N_TRAJECTORIES
+    total_time = Config.TOTAL_TIME
+    n_points = Config.N_POINTS
+    random_seed = Config.RANDOM_SEED
 
     # Check if cached data exists
     data_cache_path = os.path.join(data_dir, "5_trajectory_training_data.npz")
@@ -525,10 +246,12 @@ def main():
         else:
             print("  ⚠ Cached data has different settings, regenerating...")
             x_t, x_t_plus_1, training_trajectories = generate_trajectory_data(
-                n_trajectories=n_trajectories,
+                ode_func=lorenz_ode,
+                ode_params={},
+                n_samples=n_trajectories,
                 total_time=total_time,
                 n_points=n_points,
-                domain_bounds=domain_bounds,
+                sampling_domain=np.array(domain_bounds),
                 random_seed=random_seed
             )
             # Save new data
@@ -542,10 +265,12 @@ def main():
     else:
         print(f"  No cached data found, generating new trajectories...")
         x_t, x_t_plus_1, training_trajectories = generate_trajectory_data(
-            n_trajectories=n_trajectories,
+            ode_func=lorenz_ode,
+            ode_params={},
+            n_samples=n_trajectories,
             total_time=total_time,
             n_points=n_points,
-            domain_bounds=domain_bounds,
+            sampling_domain=np.array(domain_bounds),
             random_seed=random_seed
         )
         # Save for future runs
@@ -608,8 +333,8 @@ def main():
     train_dataset = TensorDataset(x_train_tensor, y_train_tensor)
     val_dataset = TensorDataset(x_val_tensor, y_val_tensor)
 
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False)
 
     print(f"Training set: {len(x_train)} samples")
     print(f"Validation set: {len(x_val)} samples")
@@ -618,9 +343,9 @@ def main():
     print("\n3. Defining neural network models...")
 
     # Model architecture parameters
-    input_dim = 3    # 3D state space (Lorenz system)
-    latent_dim = 2   # 2D latent space for visualization
-    hidden_dim = 128
+    input_dim = Config.INPUT_DIM
+    latent_dim = Config.LATENT_DIM
+    hidden_dim = Config.HIDDEN_DIM
 
     # Create models
     encoder = Encoder(input_dim=input_dim, latent_dim=latent_dim, hidden_dim=hidden_dim)
@@ -716,7 +441,7 @@ def main():
 
         # Optimizer
         parameters = list(encoder.parameters()) + list(decoder.parameters()) + list(latent_dynamics.parameters())
-        optimizer = torch.optim.Adam(parameters, lr=0.001)
+        optimizer = torch.optim.Adam(parameters, lr=Config.LEARNING_RATE)
 
         # Loss function
         mse_loss = nn.MSELoss()
@@ -725,10 +450,10 @@ def main():
         train_losses = {'reconstruction': [], 'dynamics_recon': [], 'dynamics_consistency': [], 'total': []}
         val_losses = {'reconstruction': [], 'dynamics_recon': [], 'dynamics_consistency': [], 'total': []}
 
-        # Loss weights (can be adjusted)
-        w_recon = 1.0
-        w_dyn_recon = 2.0
-        w_dyn_cons = 1.0
+        # Loss weights
+        w_recon = Config.W_RECON
+        w_dyn_recon = Config.W_DYN_RECON
+        w_dyn_cons = Config.W_DYN_CONS
 
         print(f"  Training for {num_epochs} epochs...")
         print(f"  Loss weights: reconstruction={w_recon}, dynamics_recon={w_dyn_recon}, dynamics_consistency={w_dyn_cons}")
@@ -1033,7 +758,7 @@ def main():
 
         # Plot encoded training data as background
         ax.scatter(z_train[:, 0], z_train[:, 1], s=1, alpha=0.15, c=color_background,
-                   zorder=0)
+                   zorder=0, rasterized=True)
 
         # Integrate the same orbit as before
         sol = solve_ivp(
@@ -1119,7 +844,7 @@ def main():
     print("\n8. Performing Morse Graph analysis...")
 
     # Step 1: Compute Lorenz MorseGraph (3D)
-    print("\n  8.1. Computing Morse Graph for true Lorenz dynamics (3D)...")
+    print("\n  8.1. Computing Morse Graph for Lorenz system...")
     try:
         lorenz_grid = UniformGrid(bounds=np.array(domain_bounds), divisions=LORENZ_GRID_DIVISIONS)
         lorenz_dynamics = BoxMapODE(
@@ -1128,14 +853,15 @@ def main():
         lorenz_model = Model(lorenz_grid, lorenz_dynamics)
         lorenz_box_map = lorenz_model.compute_box_map()
         lorenz_morse_graph = compute_morse_graph(lorenz_box_map)
-        print(f"    Lorenz Morse Graph: {len(lorenz_morse_graph.nodes())} Morse sets found.")
+        print(f"    {len(lorenz_morse_graph.nodes())} Morse sets found.")
     except Exception as e:
         print(f"    ✗ Error computing Lorenz Morse Graph: {e}")
         lorenz_morse_graph = None
         lorenz_box_map = None
+        lorenz_grid = None
 
     # Step 2: Compute Latent MorseGraph - Full Grid (2D)
-    print("\n  8.2. Computing Morse Graph for learned latent dynamics (full 2D grid)...")
+    print("\n  8.2. Computing Morse Graph for latent dynamics (full grid)...")
     try:
         # Encode training data to find latent bounds
         with torch.no_grad():
@@ -1145,23 +871,19 @@ def main():
         latent_bounds = compute_latent_bounds(z_train, padding_factor=LATENT_BOUNDS_PADDING)
 
         latent_grid_full = UniformGrid(bounds=latent_bounds, divisions=LATENT_GRID_DIVISIONS)
-
-        # Use a bloating factor equal to the cell size, similar to Example 4
-        latent_epsilon_bloat = latent_grid_full.box_size
-        print(f"    Using latent epsilon bloat (1.0 x cell size): {latent_epsilon_bloat}")
-
+        
         latent_dynamics_full = BoxMapLearnedLatent(
             latent_dynamics_model=latent_dynamics,
             decoder_model=decoder,
             encoder_model=encoder,
             device=device,
-            epsilon_bloat=latent_epsilon_bloat
+            epsilon_bloat=latent_grid_full.box_size # Use a bloating factor equal to the cell size
         )
 
         latent_model_full = Model(latent_grid_full, latent_dynamics_full)
         latent_box_map_full = latent_model_full.compute_box_map()
         latent_morse_graph_full = compute_morse_graph(latent_box_map_full)
-        print(f"    Latent Full Morse Graph: {len(latent_morse_graph_full.nodes())} Morse sets found.")
+        print(f"    {len(latent_morse_graph_full.nodes())} Morse sets found.")
     except Exception as e:
         print(f"    ✗ Error computing Latent Full Morse Graph: {e}")
         latent_morse_graph_full = None
@@ -1169,20 +891,19 @@ def main():
         latent_grid_full = None
 
     # Step 3: Compute Latent MorseGraph - Data-Restricted (2D)
-    print("\n  8.3. Computing Morse Graph for learned latent dynamics (data-restricted 2D grid)...")
+    print("\n  8.3. Computing Morse Graph for latent dynamics restricted to image of E...")
     active_boxes = None  # Initialize
     try:
         if latent_grid_full is not None:
-            # Use 1.5x cell diagonal for a thicker data restriction radius
-            data_restriction_epsilon = 1.5 * np.linalg.norm(latent_grid_full.box_size)
-            print(f"    Using data restriction epsilon (1.5 * cell diagonal): {data_restriction_epsilon:.4f}")
+            # Use Config factor for radius of data restriction
+            data_restriction_radius = Config.DATA_RESTRICTION_EPSILON_FACTOR * np.linalg.norm(latent_grid_full.box_size)
 
             active_boxes = filter_boxes_near_data(
                 latent_grid_full,
                 z_train,
-                data_restriction_epsilon
+                data_restriction_radius
             )
-            print(f"    Found {len(active_boxes)} active boxes near training data out of {len(latent_grid_full.get_boxes())}.")
+            print(f"    Found {len(active_boxes)} boxes near training data out of {len(latent_grid_full.get_boxes())}.")
 
             latent_box_map_restricted = nx.DiGraph()
             latent_box_map_restricted.add_nodes_from(active_boxes)
@@ -1196,7 +917,7 @@ def main():
                         latent_box_map_restricted.add_edge(box_idx, target_idx)
 
             latent_morse_graph_restricted = compute_morse_graph(latent_box_map_restricted)
-            print(f"    Latent Restricted Morse Graph: {len(latent_morse_graph_restricted.nodes())} Morse sets found.")
+            print(f"    {len(latent_morse_graph_restricted.nodes())} Morse sets found.")
         else:
             raise RuntimeError("Skipping due to failure in full grid computation.")
     except Exception as e:
@@ -1210,6 +931,8 @@ def main():
     try:
         create_morsegraph_comparison_figure(
             lorenz_morse_graph=lorenz_morse_graph,
+            lorenz_grid=lorenz_grid,
+            lorenz_box_map=lorenz_box_map,
             latent_morse_graph_full=latent_morse_graph_full,
             latent_box_map_full=latent_box_map_full,
             latent_grid_full=latent_grid_full,
