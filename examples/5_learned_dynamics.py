@@ -68,13 +68,14 @@ class Config:
     '''Configuration parameters for the learned dynamics example.'''
     # --- Training Control ---
     FORCE_RETRAIN = False
-    NUM_EPOCHS = 300
+    NUM_EPOCHS = 200
     RANDOM_SEED = 42
 
     # --- Data Generation (Lorenz System) ---
     N_TRAJECTORIES = 1000
-    TOTAL_TIME = 10.0
-    N_POINTS = 11  # Number of points per trajectory
+    TIME_SKIP = 6.0  # Time to integrate before sampling starts
+    SAMPLING_TIME = 6.0  # Duration of the sampled trajectory
+    N_POINTS = 10  # Number of points per trajectory
     DOMAIN_BOUNDS = [[-20, -30, 5], [20, 30, 50]]
 
     # --- Model Architecture ---
@@ -87,12 +88,12 @@ class Config:
     LEARNING_RATE = 0.001
     # Loss weights
     W_RECON = 1.0
-    W_DYN_RECON = 5.0
+    W_DYN_RECON = 10.0
     W_DYN_CONS = 1.0
 
     # --- MorseGraph Computation ---
     # For Lorenz system
-    LORENZ_GRID_DIVISIONS = [32, 32, 32]
+    LORENZ_GRID_DIVISIONS = [16, 16, 16]
     LORENZ_EPSILON_BLOAT = 0.1
     # For learned latent system
     LATENT_GRID_DIVISIONS = [256, 256]
@@ -226,57 +227,47 @@ def main():
 
     domain_bounds = Config.DOMAIN_BOUNDS
     n_trajectories = Config.N_TRAJECTORIES
-    total_time = Config.TOTAL_TIME
+    timeskip = Config.TIME_SKIP
+    sampling_time = Config.SAMPLING_TIME
     n_points = Config.N_POINTS
     random_seed = Config.RANDOM_SEED
 
     # Check if cached data exists
     data_cache_path = os.path.join(data_dir, "5_trajectory_training_data.npz")
 
-    if os.path.exists(data_cache_path):
+    if os.path.exists(data_cache_path) and not force_retrain:
         print(f"  Found cached data at: {data_cache_path}")
         x_t, x_t_plus_1, training_trajectories, loaded_metadata = load_trajectory_data(data_cache_path)
 
         # Verify metadata matches current settings
-        if (loaded_metadata['n_trajectories'] == n_trajectories and
-            loaded_metadata['total_time'] == total_time and
-            loaded_metadata['n_points'] == n_points and
-            loaded_metadata['random_seed'] == random_seed):
+        if (loaded_metadata.get('n_trajectories') == n_trajectories and
+            loaded_metadata.get('sampling_time') == sampling_time and
+            loaded_metadata.get('timeskip') == timeskip and
+            loaded_metadata.get('n_points') == n_points and
+            loaded_metadata.get('random_seed') == random_seed):
             print("  ✓ Cached data matches current settings, using cached data")
         else:
             print("  ⚠ Cached data has different settings, regenerating...")
-            x_t, x_t_plus_1, training_trajectories = generate_trajectory_data(
-                ode_func=lorenz_ode,
-                ode_params={},
-                n_samples=n_trajectories,
-                total_time=total_time,
-                n_points=n_points,
-                sampling_domain=np.array(domain_bounds),
-                random_seed=random_seed
-            )
-            # Save new data
-            metadata = {
-                'n_trajectories': n_trajectories,
-                'total_time': total_time,
-                'n_points': n_points,
-                'random_seed': random_seed
-            }
-            save_trajectory_data(data_cache_path, x_t, x_t_plus_1, training_trajectories, metadata)
-    else:
-        print(f"  No cached data found, generating new trajectories...")
+            force_retrain = True # Force regeneration
+
+    if not os.path.exists(data_cache_path) or force_retrain:
+        if not os.path.exists(data_cache_path):
+            print(f"  No cached data found, generating new trajectories...")
         x_t, x_t_plus_1, training_trajectories = generate_trajectory_data(
             ode_func=lorenz_ode,
             ode_params={},
             n_samples=n_trajectories,
-            total_time=total_time,
+            total_time=sampling_time,
             n_points=n_points,
             sampling_domain=np.array(domain_bounds),
-            random_seed=random_seed
+            random_seed=random_seed,
+            timeskip=timeskip
         )
         # Save for future runs
         metadata = {
             'n_trajectories': n_trajectories,
-            'total_time': total_time,
+            'sampling_time': sampling_time,
+            'timeskip': timeskip,
             'n_points': n_points,
             'random_seed': random_seed
         }
