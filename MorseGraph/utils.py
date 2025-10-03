@@ -22,14 +22,15 @@ def generate_trajectory_data(
     total_time: float,
     n_points: int,
     sampling_domain: np.ndarray,
-    random_seed: Optional[int] = 42
+    random_seed: Optional[int] = 42,
+    timeskip: float = 0.0
 ) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray]]:
     """
     Generate trajectory data from an ODE by sampling random initial conditions.
 
     This function creates training data for dynamics learning by:
     1. Sampling random initial conditions from a domain
-    2. Integrating each trajectory forward in time
+    2. Integrating each trajectory forward in time (with optional timeskip)
     3. Extracting discrete time points along each trajectory
     4. Creating (X, Y) pairs where Y = f(X) after time dt
 
@@ -37,10 +38,13 @@ def generate_trajectory_data(
         ode_func: ODE function with signature f(t, y, **params)
         ode_params: Dictionary of parameters to pass to ode_func
         n_samples: Number of random initial conditions to generate
-        total_time: Total integration time per trajectory
+        total_time: Total integration time per trajectory (after timeskip)
         n_points: Number of discrete points to extract per trajectory
         sampling_domain: Domain bounds of shape (2, D) for [[mins], [maxs]]
         random_seed: Random seed for reproducibility (default: 42)
+        timeskip: Time to skip before sampling starts (default: 0.0).
+                   If > 0, trajectories are first integrated from 0 to timeskip
+                   (to reach attractor), then sampled from timeskip to timeskip+total_time.
 
     Returns:
         X: Array of shape (n_samples * (n_points-1), D) - current states
@@ -51,8 +55,13 @@ def generate_trajectory_data(
         >>> from MorseGraph.utils import generate_trajectory_data
         >>> from MorseGraph.systems import van_der_pol_ode
         >>> domain = np.array([[-4, -4], [4, 4]])
+        >>> # Sample from t=0 to t=10
         >>> X, Y, trajs = generate_trajectory_data(
         ...     van_der_pol_ode, {'mu': 1.0}, 100, 10.0, 11, domain
+        ... )
+        >>> # Sample from t=5 to t=10 (5s timeskip, then 5s sampling)
+        >>> X, Y, trajs = generate_trajectory_data(
+        ...     van_der_pol_ode, {'mu': 1.0}, 100, 5.0, 6, domain, timeskip=5.0
         ... )
     """
     if random_seed is not None:
@@ -71,17 +80,37 @@ def generate_trajectory_data(
     Y = []
     trajectories = []
 
-    print(f"  Generating {n_samples} trajectories with {n_points} points each...")
+    if timeskip > 0:
+        print(f"  Generating {n_samples} trajectories with {n_points} points each...")
+        print(f"  Timeskip period: t=0 to t={timeskip}, then sampling t={timeskip} to t={timeskip + total_time}")
+    else:
+        print(f"  Generating {n_samples} trajectories with {n_points} points each...")
 
     for i, ic in enumerate(initial_conditions):
         if (i + 1) % 100 == 0:
             print(f"    Progress: {i+1}/{n_samples}")
 
+        # If timeskip > 0, do timeskip integration first
+        if timeskip > 0:
+            # Timeskip: integrate from 0 to timeskip
+            timeskip_sol = solve_ivp(
+                lambda t, y: ode_func(t, y, **ode_params),
+                [0, timeskip],
+                ic,
+                method='DOP853',
+                rtol=1e-12,
+                atol=1e-14
+            )
+            # Use final state of timeskip as new initial condition
+            ic_after_timeskip = timeskip_sol.y[:, -1]
+        else:
+            ic_after_timeskip = ic
+
         # Integrate ODE with high accuracy
         sol = solve_ivp(
             lambda t, y: ode_func(t, y, **ode_params),
-            [0, total_time],
-            ic,
+            [timeskip, timeskip + total_time],
+            ic_after_timeskip,
             dense_output=True,
             method='DOP853',
             rtol=1e-12,
@@ -89,17 +118,19 @@ def generate_trajectory_data(
         )
 
         # Extract n_points uniformly spaced along trajectory
-        times = np.linspace(0, total_time, n_points)
+        times = np.linspace(timeskip, timeskip + total_time, n_points)
         trajectory = sol.sol(times).T  # Shape: (n_points, dim)
 
         trajectories.append(trajectory)
 
-        # Create (X, Y) pairs: X[i] -> Y[i+1]
-        for j in range(len(trajectory) - 1):
-            X.append(trajectory[j])
-            Y.append(trajectory[j + 1])
+        # Create (X, Y) pairs from the trajectory
+        X.append(trajectory[:-1])
+        Y.append(trajectory[1:])
 
-    return np.array(X), np.array(Y), trajectories
+    X = np.concatenate(X, axis=0)
+    Y = np.concatenate(Y, axis=0)
+
+    return X, Y, trajectories
 
 
 # =============================================================================
@@ -174,13 +205,19 @@ def load_trajectory_data(filepath: str) -> Tuple[np.ndarray, np.ndarray, List[np
     # Extract metadata
     metadata = {
         'n_trajectories': n_trajectories,
-        'total_time': float(data['total_time']),
         'n_points': int(data['n_points']),
         'random_seed': int(data['random_seed'])
     }
+    if 'total_time' in data:
+        metadata['total_time'] = float(data['total_time'])
+    if 'sampling_time' in data:
+        metadata['sampling_time'] = float(data['sampling_time'])
+    if 'timeskip' in data:
+        metadata['timeskip'] = float(data['timeskip'])
+
 
     print(f"  Loaded training data from: {filepath}")
-    print(f"  Metadata: {n_trajectories} trajectories, {metadata['n_points']} points each")
+    print(f"  Metadata: {metadata}")
 
     return x_t, x_t_plus_1, trajectories, metadata
 

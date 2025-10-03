@@ -303,16 +303,24 @@ def plot_morse_graph(morse_graph: nx.DiGraph, ax: plt.Axes = None,
     # Use colors from node attributes or generate
     node_colors = []
     for morse_set in morse_sets:
+        color = None
         if 'color' in morse_graph.nodes[morse_set]:
             # Use color from node attribute
-            node_colors.append(morse_graph.nodes[morse_set]['color'])
+            color = morse_graph.nodes[morse_set]['color']
         else:
             # Generate color for backward compatibility
             num_sets = len(morse_sets)
             cmap = cm.get_cmap('tab10')
             color = cmap(morse_sets.index(morse_set) / max(num_sets, 10))
-            node_colors.append(color)
-    
+
+        # Convert numpy floats to python floats to avoid pygraphviz warning
+        if hasattr(color, '__iter__'):
+            color = tuple(float(c) for c in color)
+
+        node_colors.append(color)
+        # Update graph attribute for pygraphviz
+        morse_graph.nodes[morse_set]['color'] = color
+
     # Create a mapping from frozenset to a shorter string representation
     node_labels = {node: str(i+1) for i, node in enumerate(morse_sets)}
     
