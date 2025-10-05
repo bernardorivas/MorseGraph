@@ -1,17 +1,46 @@
-# MorseGraph
+There are 4 packages in this repo:
 
-A lightweight Python library for computing and analyzing Morse graphs of dynamical systems using computational topology methods.
+1. morsegraph (from /MorseGraph/) - installed via root pyproject.toml
+2. CMGDB (from /cmgdb/) - C++ package with Python bindings (@marciogameiro)
+3. hybrid-dynamics (from /hybrid_boxmap/) - imported as hybrid_dynamics (@bernardorivas)
+4. MORALS (from /morals/) - depends on CMGDB (@ewertonvieira)
+
+# Installation Options
+From repo root
+pip install -e .                  # Installs morsegraph
+pip install -e ./cmgdb            # Installs CMGDB (requires cmake)
+pip install -e ./hybrid_boxmap    # Installs hybrid-dynamics  
+pip install -e ./morals           # Installs MORALS
+
+Once installed, you import them by their package names (not directory names):
+
+# MorseGraph package
+from MorseGraph import Model
+
+# CMGDB package (C++)
+import CMGDB
+
+# Hybrid dynamics package
+from hybrid_dynamics import HybridSystem
+
+# MORALS package
+import MORALS
+
+
+## About MorseGraph
+
+MorseGraph is a lightweight Python library for computing and analyzing Morse graphs of dynamical systems using computational topology methods. It's mostly useful for toy problems. For faster computations, we recommend @cmgdb
 
 ## Overview
 
-MorseGraph provides tools to study the global structure of dynamical systems through discrete abstractions on grids. The library implements rigorous outer approximations of dynamics and uses graph-theoretic methods to identify attractors, basins of attraction, and connecting orbits.
+MorseGraph provides tools to study the global structure of dynamical systems through discrete abstractions on grids. The library implements outer approximations of dynamics and uses graph-theoretic methods to identify attractors, basins of attraction, and connecting orbits.
 
 **Key Features:**
-- Support for discrete maps, ODEs, and data-driven dynamics
-- Rigorous outer approximation using epsilon-bloating
+- Support for discrete maps, ODEs, data-driven and latent dynamics
+- Outer approximation using epsilon-enlargement of boxes
 - Parallel computation of box-to-box transitions
-- Morse decomposition via strongly connected components
-- Basin of attraction computation
+- Morse decomposition via (non-trivial) strongly connected components
+- Computation of basin of attraction
 - ML integration for learning low-dimensional representations
 - Built-in visualization utilities
 

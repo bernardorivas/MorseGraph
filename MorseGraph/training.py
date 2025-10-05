@@ -9,12 +9,7 @@ import os
 from typing import Optional
 import torch
 from torch.utils.data import DataLoader
-
-# Use try-except for type hinting
-try:
-    from .models import Encoder, Decoder, LatentDynamics
-except ImportError:
-    from morsegraph.models import Encoder, Decoder, LatentDynamics
+from .models import Encoder, Decoder, LatentDynamics
 
 
 class Training:
