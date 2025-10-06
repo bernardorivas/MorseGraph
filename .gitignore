@@ -35,14 +35,10 @@ Thumbs.db
 CLAUDE.md
 GEMINI.md
 
-# Project outputs
-/examples/output/
-data/
-tests/*
-!tests/README.md
-notebooks/*
-!notebooks/README.md
-examples/data/
-examples/figures/
-examples/leslie_experiments/
-examples/leslie_model/
+# # Project outputs
+# /examples/output/
+# data/
+# examples/data/
+# examples/figures/
+# examples/leslie_experiments/
+# examples/leslie_model/

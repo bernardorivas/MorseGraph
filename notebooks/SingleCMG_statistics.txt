@@ -1,0 +1,8 @@
+Morse Graph calculation resource usage statistics.
+The final grid has 89979 grid elements.
+The computation took 0.594885 seconds.
+All memory figures are in bytes:
+grid_memory_use = 6838626
+max_graph_memory = 6037072
+max_scc_memory_internal = 550477
+max_scc_memory_external = 1392664

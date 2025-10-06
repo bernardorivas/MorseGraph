@@ -39,6 +39,81 @@ def henon_map(x: np.ndarray, a: float = 1.4, b: float = 0.3) -> np.ndarray:
     return np.array([x_next, y_next])
 
 
+def leslie_map(x: np.ndarray, th1: float = 19.6, th2: float = 23.68,
+               mortality: float = 0.7) -> np.ndarray:
+    """
+    Leslie matrix population model map.
+
+    A discrete-time population model with two age classes. The map captures
+    reproduction and survival dynamics in structured populations.
+
+    The Leslie map is defined by:
+        x_{n+1} = (th1*x_n + th2*y_n) * exp(-0.1*(x_n + y_n))
+        y_{n+1} = mortality * x_n
+
+    Args:
+        x: State vector of shape (2,) with [x, y] representing two age classes
+        th1: Fertility parameter for age class 1 (default: 19.6)
+        th2: Fertility parameter for age class 2 (default: 23.68)
+        mortality: Survival rate from class 1 to class 2 (default: 0.7)
+
+    Returns:
+        Next state vector of shape (2,)
+
+    Example:
+        >>> from MorseGraph.systems import leslie_map
+        >>> x = np.array([10.0, 5.0])
+        >>> x_next = leslie_map(x)
+    """
+    x_val, y_val = x
+    x_next = (th1 * x_val + th2 * y_val) * np.exp(-0.1 * (x_val + y_val))
+    y_next = mortality * x_val
+    return np.array([x_next, y_next])
+
+
+def leslie_map_3d(x: np.ndarray,
+                  theta_1: float = 28.9,
+                  theta_2: float = 29.8,
+                  theta_3: float = 22.0,
+                  mortality: float = 0.7) -> np.ndarray:
+    """
+    Three-dimensional Leslie population model map.
+
+    Extended Leslie matrix model with three age classes. This map captures
+    reproduction and survival dynamics in structured populations with an
+    additional age class.
+
+    The 3D Leslie map is defined by:
+        x_{n+1} = (th1*x_n + th2*y_n + th3*z_n) * exp(-0.1*(x_n + y_n + z_n))
+        y_{n+1} = mortality * x_n
+        z_{n+1} = mortality * y_n
+
+    Args:
+        x: State vector of shape (3,) with [x, y, z] representing three age classes
+        theta_1: Fertility parameter for age class 1 (default: 28.9)
+        theta_2: Fertility parameter for age class 2 (default: 29.8)
+        theta_3: Fertility parameter for age class 3 (default: 22.0)
+        mortality: Survival rate between consecutive age classes (default: 0.7)
+
+    Returns:
+        Next state vector of shape (3,)
+
+    Example:
+        >>> from MorseGraph.systems import leslie_map_3d
+        >>> x = np.array([10.0, 5.0, 2.0])
+        >>> x_next = leslie_map_3d(x)
+
+    Reference:
+        Leslie, P.H., "On the use of matrices in certain population mathematics"
+        Biometrika 33 (3): 183-212 (1945)
+    """
+    x0, x1, x2 = x
+    x0_next = (theta_1 * x0 + theta_2 * x1 + theta_3 * x2) * np.exp(-0.1 * (x0 + x1 + x2))
+    x1_next = mortality * x0
+    x2_next = mortality * x1
+    return np.array([x0_next, x1_next, x2_next])
+
+
 # =============================================================================
 # ODEs (Continuous Systems)
 # =============================================================================

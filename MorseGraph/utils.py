@@ -5,10 +5,19 @@ This module provides helper functions for working with trajectory data,
 latent space operations, and spatial filtering of grid boxes.
 """
 
+import os
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.spatial import cKDTree
+from joblib import Parallel, delayed
 from typing import Callable, Dict, Tuple, List, Optional, Any
+
+# Try to import tqdm for progress bars
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
 
 
 # =============================================================================
@@ -23,7 +32,8 @@ def generate_trajectory_data(
     n_points: int,
     sampling_domain: np.ndarray,
     random_seed: Optional[int] = 42,
-    timeskip: float = 0.0
+    timeskip: float = 0.0,
+    n_jobs: int = -1
 ) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray]]:
     """
     Generate trajectory data from an ODE by sampling random initial conditions.
@@ -45,6 +55,7 @@ def generate_trajectory_data(
         timeskip: Time to skip before sampling starts (default: 0.0).
                    If > 0, trajectories are first integrated from 0 to timeskip
                    (to reach attractor), then sampled from timeskip to timeskip+total_time.
+        n_jobs: Number of parallel jobs. -1 uses all CPUs (default: -1)
 
     Returns:
         X: Array of shape (n_samples * (n_points-1), D) - current states
@@ -76,20 +87,14 @@ def generate_trajectory_data(
         (n_samples, dim)
     )
 
-    X = []
-    Y = []
-    trajectories = []
-
     if timeskip > 0:
         print(f"  Generating {n_samples} trajectories with {n_points} points each...")
         print(f"  Timeskip period: t=0 to t={timeskip}, then sampling t={timeskip} to t={timeskip + total_time}")
     else:
         print(f"  Generating {n_samples} trajectories with {n_points} points each...")
 
-    for i, ic in enumerate(initial_conditions):
-        if (i + 1) % 100 == 0:
-            print(f"    Progress: {i+1}/{n_samples}")
-
+    def integrate_trajectory(ic):
+        """Integrate a single trajectory from initial condition."""
         # If timeskip > 0, do timeskip integration first
         if timeskip > 0:
             # Timeskip: integrate from 0 to timeskip
@@ -121,14 +126,145 @@ def generate_trajectory_data(
         times = np.linspace(timeskip, timeskip + total_time, n_points)
         trajectory = sol.sol(times).T  # Shape: (n_points, dim)
 
-        trajectories.append(trajectory)
-
         # Create (X, Y) pairs from the trajectory
-        X.append(trajectory[:-1])
-        Y.append(trajectory[1:])
+        X_traj = trajectory[:-1]
+        Y_traj = trajectory[1:]
+
+        return X_traj, Y_traj, trajectory
+
+    # Parallel computation with progress bar
+    if HAS_TQDM:
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(integrate_trajectory)(ic)
+            for ic in tqdm(initial_conditions, desc="  Progress", ncols=80)
+        )
+    else:
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(integrate_trajectory)(ic) for ic in initial_conditions
+        )
+        print(f"  Completed {n_samples} trajectories")
+
+    # Unpack results
+    X = [r[0] for r in results]
+    Y = [r[1] for r in results]
+    trajectories = [r[2] for r in results]
 
     X = np.concatenate(X, axis=0)
     Y = np.concatenate(Y, axis=0)
+
+    return X, Y, trajectories
+
+
+def generate_map_trajectory_data(
+    map_func: Callable,
+    n_trajectories: int,
+    n_points: int,
+    sampling_domain: np.ndarray,
+    random_seed: Optional[int] = 42,
+    skip_initial: int = 0,
+    n_jobs: int = -1
+) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray]]:
+    """
+    Generate trajectory data from a discrete map by iterating from random initial conditions.
+
+    This function creates training data for dynamics learning by:
+    1. Sampling random initial conditions from a domain
+    2. Iterating the map forward for n_points steps
+    3. Optionally skipping initial iterations (to reach attractor)
+    4. Creating (X, Y) pairs where Y = map(X)
+
+    Args:
+        map_func: Map function with signature f(x) -> x_next, where x is a state vector
+        n_trajectories: Number of random initial conditions to generate
+        n_points: Number of iterations per trajectory (including skip_initial)
+        sampling_domain: Domain bounds of shape (2, D) for [[mins], [maxs]]
+        random_seed: Random seed for reproducibility (default: 42)
+        skip_initial: Number of initial iterations to skip before collecting data (default: 0).
+                      If > 0, the map is iterated skip_initial times before data collection starts,
+                      useful for reaching an attractor.
+        n_jobs: Number of parallel jobs. -1 uses all CPUs (default: -1)
+
+    Returns:
+        X: Array of shape (n_trajectories * (n_points - skip_initial - 1), D) - current states
+        Y: Array of shape (n_trajectories * (n_points - skip_initial - 1), D) - next states
+        trajectories: List of n_trajectories trajectory arrays, each of shape (n_points - skip_initial, D)
+
+    Example:
+        >>> from MorseGraph.utils import generate_map_trajectory_data
+        >>> from MorseGraph.systems import henon_map
+        >>> domain = np.array([[-2, -2], [2, 2]])
+        >>> # Generate 100 trajectories with 50 points each
+        >>> X, Y, trajs = generate_map_trajectory_data(
+        ...     henon_map, 100, 50, domain
+        ... )
+        >>> # Skip first 10 iterations to reach attractor
+        >>> X, Y, trajs = generate_map_trajectory_data(
+        ...     henon_map, 100, 50, domain, skip_initial=10
+        ... )
+    """
+    if random_seed is not None:
+        np.random.seed(random_seed)
+
+    dim = sampling_domain.shape[1]
+
+    # Sample random initial conditions
+    initial_conditions = np.random.uniform(
+        sampling_domain[0],
+        sampling_domain[1],
+        (n_trajectories, dim)
+    )
+
+    if skip_initial > 0:
+        print(f"  Generating {n_trajectories} map trajectories with {n_points} iterations each...")
+        print(f"  Skipping first {skip_initial} iterations, collecting {n_points - skip_initial} points")
+    else:
+        print(f"  Generating {n_trajectories} map trajectories with {n_points} iterations each...")
+
+    def iterate_map(ic):
+        """Iterate a single map trajectory from initial condition."""
+        x_current = ic.copy()
+        trajectory_points = []
+        X_traj = []
+        Y_traj = []
+
+        for step in range(n_points):
+            x_next = map_func(x_current)
+
+            # Collect data after skip_initial iterations
+            if step >= skip_initial:
+                trajectory_points.append(x_current.copy())
+                # Create (X, Y) pairs, except for the last point
+                if step < n_points - 1:
+                    X_traj.append(x_current.copy())
+                    Y_traj.append(x_next.copy())
+
+            x_current = x_next
+
+        return X_traj, Y_traj, np.array(trajectory_points)
+
+    # Parallel computation with progress bar
+    if HAS_TQDM:
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(iterate_map)(ic)
+            for ic in tqdm(initial_conditions, desc="  Progress", ncols=80)
+        )
+    else:
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(iterate_map)(ic) for ic in initial_conditions
+        )
+        print(f"  Completed {n_trajectories} trajectories")
+
+    # Unpack results
+    X = []
+    Y = []
+    trajectories = []
+    for X_traj, Y_traj, trajectory in results:
+        X.extend(X_traj)
+        Y.extend(Y_traj)
+        trajectories.append(trajectory)
+
+    X = np.concatenate([x[np.newaxis, :] for x in X], axis=0) if X else np.array([])
+    Y = np.concatenate([y[np.newaxis, :] for y in Y], axis=0) if Y else np.array([])
 
     return X, Y, trajectories
 
@@ -222,6 +358,49 @@ def load_trajectory_data(filepath: str) -> Tuple[np.ndarray, np.ndarray, List[np
     return x_t, x_t_plus_1, trajectories, metadata
 
 
+def get_next_run_number(base_dir: str) -> int:
+    """
+    Find the next available run number in a directory containing run_XXX folders.
+
+    Scans the base directory for existing folders named 'run_001', 'run_002', etc.,
+    and returns the next available number in the sequence.
+
+    Args:
+        base_dir: Directory to scan for existing run folders
+
+    Returns:
+        Next available run number (starting from 1)
+
+    Example:
+        >>> # Directory contains run_001, run_002, run_005
+        >>> get_next_run_number('/path/to/experiments')
+        6
+        >>> # Empty directory
+        >>> get_next_run_number('/path/to/new_experiments')
+        1
+    """
+    if not os.path.exists(base_dir):
+        return 1
+
+    existing_runs = [
+        d for d in os.listdir(base_dir)
+        if d.startswith('run_') and os.path.isdir(os.path.join(base_dir, d))
+    ]
+    if not existing_runs:
+        return 1
+
+    # Extract run numbers
+    run_numbers = []
+    for run_dir in existing_runs:
+        try:
+            num = int(run_dir.split('_')[1])
+            run_numbers.append(num)
+        except (IndexError, ValueError):
+            continue
+
+    return max(run_numbers) + 1 if run_numbers else 1
+
+
 # =============================================================================
 # Latent Space Utilities
 # =============================================================================
@@ -255,6 +434,62 @@ def compute_latent_bounds(
     range_vec = (maxs - mins) * padding_factor / 2
 
     return np.array([center - range_vec, center + range_vec])
+
+
+# =============================================================================
+# ML Training Utilities
+# =============================================================================
+
+def count_parameters(model) -> int:
+    """
+    Count the number of trainable parameters in a PyTorch model.
+
+    Args:
+        model: PyTorch model instance
+
+    Returns:
+        Total number of trainable parameters
+
+    Example:
+        >>> from MorseGraph.models import Encoder
+        >>> encoder = Encoder(input_dim=3, latent_dim=2, hidden_dim=64, num_layers=3)
+        >>> num_params = count_parameters(encoder)
+        >>> print(f"Encoder has {num_params:,} parameters")
+    """
+    try:
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+    except AttributeError:
+        raise TypeError("Model must be a PyTorch model with .parameters() method")
+
+
+def format_time(seconds: float) -> str:
+    """
+    Format time duration in seconds as a human-readable string.
+
+    Args:
+        seconds: Time duration in seconds
+
+    Returns:
+        Formatted string (e.g., "1.5s", "2m 30s", "1h 15m")
+
+    Example:
+        >>> format_time(45.3)
+        '45.3s'
+        >>> format_time(150)
+        '2m 30s'
+        >>> format_time(3900)
+        '1h 5m'
+    """
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    elif seconds < 3600:
+        mins = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{mins}m {secs}s"
+    else:
+        hours = int(seconds // 3600)
+        mins = int((seconds % 3600) // 60)
+        return f"{hours}h {mins}m"
 
 
 # =============================================================================
@@ -301,3 +536,42 @@ def filter_boxes_near_data(
     active_indices = np.where(distances <= epsilon_radius)[0]
 
     return active_indices.tolist()
+
+
+# =============================================================================
+# Morse Graph Analysis
+# =============================================================================
+
+def count_attractors(morse_graph) -> int:
+    """
+    Counts the number of attractors (nodes with no out-edges) in a Morse graph.
+
+    An attractor in a Morse graph corresponds to a minimal node in the graph,
+    which is a vertex with no outgoing edges. This function iterates through
+    all vertices in the Morse graph and counts how many have an out-degree of 0.
+
+    Args:
+        morse_graph: A Morse graph object from cmgdb. It is expected to have
+                     `vertices()` and `adjacencies(v)` methods.
+
+    Returns:
+        The number of attractors in the Morse graph. Returns 0 if the graph
+        is None or has no vertices.
+
+    Example:
+        >>> morse_graph = cmgdb.ComputeMorseGraph(model)
+        >>> num_attractors = count_attractors(morse_graph)
+        >>> print(f"Found {num_attractors} attractors.")
+    """
+    if morse_graph is None:
+        return 0
+    
+    vertices = morse_graph.vertices()
+    if not vertices:
+        return 0
+
+    attractor_count = 0
+    for v in vertices:
+        if not morse_graph.adjacencies(v):
+            attractor_count += 1
+    return attractor_count

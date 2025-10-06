@@ -1,0 +1,101 @@
+{
+  "run_info": {
+    "run_name": "002",
+    "run_dir": "/Users/bdoprad/Work/Code/Active/MorseGraph/examples/single_runs/run_002",
+    "timestamp": "2025-10-05T16:34:54.825250"
+  },
+  "configuration": {
+    "NUM_RUNS": 1,
+    "N_TRAJECTORIES": 5000,
+    "N_POINTS": 10,
+    "SKIP_INITIAL": 7,
+    "RANDOM_SEED": 42,
+    "DOMAIN_BOUNDS": [
+      [
+        -0.1,
+        -0.1,
+        -0.1
+      ],
+      [
+        90.0,
+        70.0,
+        70.0
+      ]
+    ],
+    "INPUT_DIM": 3,
+    "LATENT_DIM": 2,
+    "HIDDEN_DIM": 32,
+    "NUM_LAYERS": 4,
+    "NUM_EPOCHS": 1000,
+    "BATCH_SIZE": 64,
+    "LEARNING_RATE": 0.001,
+    "EARLY_STOPPING_PATIENCE": 100,
+    "MIN_DELTA": 1e-05,
+    "W_RECON": 10.0,
+    "W_DYN_RECON": 1.0,
+    "W_DYN_CONS": 1.0,
+    "LESLIE_SUBDIV_MIN": 36,
+    "LESLIE_SUBDIV_MAX": 42,
+    "LATENT_SUBDIV_MIN": 12,
+    "LATENT_SUBDIV_MAX": 16,
+    "SUBDIV_INIT": 0,
+    "SUBDIV_LIMIT": 10000,
+    "LATENT_BOUNDS_PADDING": 1.5
+  },
+  "model_architecture": {
+    "encoder_params": 3362,
+    "decoder_params": 3363,
+    "latent_dynamics_params": 3330,
+    "total_params": 10055,
+    "input_dim": 3,
+    "latent_dim": 2,
+    "hidden_dim": 32,
+    "num_layers": 4,
+    "output_activation": null
+  },
+  "training_info": {
+    "num_epochs": 1000,
+    "batch_size": 64,
+    "learning_rate": 0.001,
+    "training_time_seconds": 256.2692029476166,
+    "device": "mps",
+    "loss_weights": {
+      "w_recon": 10.0,
+      "w_dyn_recon": 1.0,
+      "w_dyn_cons": 1.0
+    }
+  },
+  "data_info": {
+    "n_trajectories": 5000,
+    "n_points": 10,
+    "skip_initial": 7,
+    "random_seed": 42,
+    "domain_bounds": [
+      [
+        -0.1,
+        -0.1,
+        -0.1
+      ],
+      [
+        90.0,
+        70.0,
+        70.0
+      ]
+    ],
+    "train_samples": 8000,
+    "val_samples": 2000
+  },
+  "results": {
+    "run_name": "002",
+    "recon_error": 0.09101171046495438,
+    "dyn_error": 0.3506048619747162,
+    "cons_error": 0.08022750914096832,
+    "num_leslie_morse_sets": 0,
+    "num_latent_full_morse_sets": 1,
+    "num_latent_restricted_morse_sets": 1,
+    "final_train_loss": 1.1303902750015258,
+    "final_val_loss": 1.3266502972692251,
+    "total_training_time": 256.2692029476166,
+    "total_parameters": 10055
+  }
+}

@@ -1,0 +1,105 @@
+{
+  "run_info": {
+    "run_name": "sigmoid_activation_010",
+    "run_dir": "/Users/bdoprad/Work/Code/Active/MorseGraph/examples/multiple_run/sigmoid_activation/run_sigmoid_activation_010",
+    "timestamp": "2025-10-06T05:35:41.683380"
+  },
+  "configuration": {
+    "NUM_RUNS": 10,
+    "N_TRAJECTORIES": 1000,
+    "N_POINTS": 20,
+    "SKIP_INITIAL": 0,
+    "RANDOM_SEED": 10,
+    "DOMAIN_BOUNDS": [
+      [
+        -0.1,
+        -0.1,
+        -0.1
+      ],
+      [
+        90.0,
+        70.0,
+        70.0
+      ]
+    ],
+    "INPUT_DIM": 3,
+    "LATENT_DIM": 2,
+    "HIDDEN_DIM": 32,
+    "NUM_LAYERS": 3,
+    "NUM_EPOCHS": 1500,
+    "BATCH_SIZE": 64,
+    "LEARNING_RATE": 0.001,
+    "EARLY_STOPPING_PATIENCE": 50,
+    "MIN_DELTA": 1e-05,
+    "W_RECON": 1.0,
+    "W_DYN_RECON": 1.0,
+    "W_DYN_CONS": 1.0,
+    "LESLIE_SUBDIV_MIN": 36,
+    "LESLIE_SUBDIV_MAX": 42,
+    "LATENT_SUBDIV_MIN": 20,
+    "LATENT_SUBDIV_MAX": 30,
+    "SUBDIV_INIT": 0,
+    "SUBDIV_LIMIT": 10000,
+    "PADDING": true,
+    "LATENT_BOUNDS_PADDING": 1.5,
+    "OUTPUT_ACTIVATION": "sigmoid"
+  },
+  "model_architecture": {
+    "encoder_params": 2306,
+    "decoder_params": 2307,
+    "latent_dynamics_params": 2274,
+    "total_params": 6887,
+    "input_dim": 3,
+    "latent_dim": 2,
+    "hidden_dim": 32,
+    "num_layers": 3,
+    "output_activation": "sigmoid"
+  },
+  "training_info": {
+    "num_epochs": 1500,
+    "batch_size": 64,
+    "learning_rate": 0.001,
+    "training_time_seconds": 74.27573776245117,
+    "device": "mps",
+    "loss_weights": {
+      "w_recon": 1.0,
+      "w_dyn_recon": 1.0,
+      "w_dyn_cons": 1.0
+    }
+  },
+  "data_info": {
+    "n_trajectories": 1000,
+    "n_points": 20,
+    "skip_initial": 0,
+    "random_seed": 10,
+    "domain_bounds": [
+      [
+        -0.1,
+        -0.1,
+        -0.1
+      ],
+      [
+        90.0,
+        70.0,
+        70.0
+      ]
+    ],
+    "train_samples": 15200,
+    "val_samples": 3800
+  },
+  "results": {
+    "run_name": "sigmoid_activation_010",
+    "recon_error": 790.740478515625,
+    "dyn_error": 734.0642700195312,
+    "cons_error": 8.57202095971843e-08,
+    "num_leslie_morse_sets": 0,
+    "num_latent_full_morse_sets": 1,
+    "num_latent_restricted_morse_sets": 0,
+    "latent_full_attractors": 1,
+    "latent_restricted_attractors": 0,
+    "final_train_loss": 1502.9387289095325,
+    "final_val_loss": 1534.9801778157553,
+    "total_training_time": 74.27573776245117,
+    "total_parameters": 6887
+  }
+}
