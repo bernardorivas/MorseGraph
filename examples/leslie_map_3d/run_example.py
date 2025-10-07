@@ -10,18 +10,18 @@ import io
 # Import saving functions from their modules
 import CMGDB.SaveMorseData
 
-
 from MorseGraph.systems import leslie_map_3d as f
 
 def F(rect):
     return CMGDB.BoxMap(f, rect)
 
-lower_bounds = [-0.1, -0.1, -0.1]
-upper_bounds = [90.0, 70.0, 70.0]
+# [[-2.3, -1.8, -0.5], [95.2, 75.1, 72.3]] bounds for seed 42
+lower_bounds = [-2.5, -2.0, -0.7]
+upper_bounds = [96.0, 76.0, 73.0]
 
-subdiv_min = 36
+subdiv_min = 39
 subdiv_max = 42
-subdiv_init = 0
+subdiv_init = 24
 subdiv_limit = 10000
 
 model = CMGDB.Model(subdiv_min, subdiv_max, subdiv_init, subdiv_limit, lower_bounds, upper_bounds, F)
