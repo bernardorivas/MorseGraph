@@ -10,7 +10,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.spatial import cKDTree
 from joblib import Parallel, delayed
-from typing import Callable, Dict, Tuple, List, Optional, Any, Union
+from typing import Callable, Dict, Tuple, List, Optional, Any, Union, Set
 
 # Try to import tqdm for progress bars
 try:
