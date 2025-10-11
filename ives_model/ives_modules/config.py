@@ -82,8 +82,8 @@ class Config:
     # ========================================================================
 
     # For learned latent system (2D)
-    LATENT_SUBDIV_MIN = 20 # 22
-    LATENT_SUBDIV_MAX = 28 # 28
+    LATENT_SUBDIV_MIN = 30 # 22
+    LATENT_SUBDIV_MAX = 40 # 28
     LATENT_SUBDIV_INIT = 0
     LATENT_SUBDIV_LIMIT = 10000
     LATENT_PADDING = True

@@ -1,0 +1,80 @@
+{
+  "run_info": {
+    "run_name": "05",
+    "run_dir": "/Users/bdoprad/Work/Code/Active/MorseGraph/ives_model/experiments/learning/multiple/multiple_001/baseline/run_05",
+    "timestamp": "2025-10-11T15:57:13.608327"
+  },
+  "configuration": {
+    "R1": 3.873,
+    "R2": 11.746,
+    "C": 3.67282300498085e-07,
+    "D": 0.5517,
+    "P": 0.06659,
+    "Q": 0.9026,
+    "LOG_OFFSET": 0.001,
+    "LOWER_BOUNDS": [
+      -1,
+      -4,
+      -1
+    ],
+    "UPPER_BOUNDS": [
+      2,
+      1,
+      1
+    ],
+    "DOMAIN_BOUNDS": [
+      [
+        -1,
+        -4,
+        -1
+      ],
+      [
+        2,
+        1,
+        1
+      ]
+    ],
+    "SUBDIV_MIN": 36,
+    "SUBDIV_MAX": 50,
+    "SUBDIV_INIT": 24,
+    "SUBDIV_LIMIT": 1000000,
+    "PADDING": true,
+    "N_TRAJECTORIES": 5000,
+    "N_POINTS": 20,
+    "SKIP_INITIAL": 0,
+    "RANDOM_SEED": 42,
+    "INPUT_DIM": 3,
+    "LATENT_DIM": 2,
+    "HIDDEN_DIM": 32,
+    "NUM_LAYERS": 3,
+    "OUTPUT_ACTIVATION": null,
+    "ENCODER_ACTIVATION": null,
+    "DECODER_ACTIVATION": null,
+    "LATENT_DYNAMICS_ACTIVATION": null,
+    "NUM_EPOCHS": 1500,
+    "BATCH_SIZE": 1024,
+    "LEARNING_RATE": 0.001,
+    "EARLY_STOPPING_PATIENCE": 50,
+    "MIN_DELTA": 1e-05,
+    "W_RECON": 1.0,
+    "W_DYN_RECON": 1.0,
+    "W_DYN_CONS": 1.0,
+    "LATENT_SUBDIV_MIN": 20,
+    "LATENT_SUBDIV_MAX": 28,
+    "LATENT_SUBDIV_INIT": 0,
+    "LATENT_SUBDIV_LIMIT": 10000,
+    "LATENT_PADDING": true,
+    "LATENT_BOUNDS_PADDING": 1.01
+  },
+  "results": {
+    "run_name": "05",
+    "num_latent_full_morse_sets": 3,
+    "num_latent_train_morse_sets": 0,
+    "num_latent_val_morse_sets": 0,
+    "num_latent_large_morse_sets": 0,
+    "final_train_loss": 0.009775649209817251,
+    "final_val_loss": 0.01060924921674948,
+    "total_training_time": 304.3737840652466,
+    "total_parameters": 6887
+  }
+}
