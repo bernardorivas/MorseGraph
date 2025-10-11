@@ -1,0 +1,25 @@
+{
+  "sweep_name": "sweep_003",
+  "sweep_dir": "/Users/bdoprad/Work/Code/Active/MorseGraph/examples/leslie_map_3d/experiments/learning/sweeps/sweep_003",
+  "timestamp": "2025-10-09T11:07:28.577390",
+  "total_experiments": 1,
+  "experiments_run": [
+    "morals_full"
+  ],
+  "num_runs_per_experiment": 1,
+  "results": [
+    {
+      "run_name": "01",
+      "num_latent_full_morse_sets": 1,
+      "num_latent_restricted_morse_sets": 0,
+      "num_latent_val_morse_sets": 0,
+      "final_train_loss": 0.9808314124743144,
+      "final_val_loss": 0.9898203015327454,
+      "total_training_time": 115.06993198394775,
+      "total_parameters": 551,
+      "experiment_name": "morals_full",
+      "experiment_description": "Full MORALS method: shallow (1 layer), large batch (1024), heavy recon weight (500:1:1)",
+      "run_number": 1
+    }
+  ]
+}

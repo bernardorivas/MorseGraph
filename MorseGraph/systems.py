@@ -75,7 +75,8 @@ def leslie_map_3d(x: np.ndarray,
                   theta_1: float = 28.9,
                   theta_2: float = 29.8,
                   theta_3: float = 22.0,
-                  mortality: float = 0.7) -> np.ndarray:
+                  survival_1: float = 0.7,
+                  survival_2: float = 0.7) -> np.ndarray:
     """
     Three-dimensional Leslie population model map.
 
@@ -85,15 +86,16 @@ def leslie_map_3d(x: np.ndarray,
 
     The 3D Leslie map is defined by:
         x_{n+1} = (th1*x_n + th2*y_n + th3*z_n) * exp(-0.1*(x_n + y_n + z_n))
-        y_{n+1} = mortality * x_n
-        z_{n+1} = mortality * y_n
+        y_{n+1} = survival_1 * x_n
+        z_{n+1} = survival_2 * y_n
 
     Args:
         x: State vector of shape (3,) with [x, y, z] representing three age classes
         theta_1: Fertility parameter for age class 1 (default: 28.9)
         theta_2: Fertility parameter for age class 2 (default: 29.8)
         theta_3: Fertility parameter for age class 3 (default: 22.0)
-        mortality: Survival rate between consecutive age classes (default: 0.7)
+        survival_1: Survival rate from age class 0 to age class 1 (default: 0.7)
+        survival_2: Survival rate from age class 1 to age class 2 (default: 0.7)
 
     Returns:
         Next state vector of shape (3,)
@@ -102,6 +104,8 @@ def leslie_map_3d(x: np.ndarray,
         >>> from MorseGraph.systems import leslie_map_3d
         >>> x = np.array([10.0, 5.0, 2.0])
         >>> x_next = leslie_map_3d(x)
+        >>> # Different survival rates
+        >>> x_next = leslie_map_3d(x, survival_1=0.8, survival_2=0.6)
 
     Reference:
         Leslie, P.H., "On the use of matrices in certain population mathematics"
@@ -109,8 +113,8 @@ def leslie_map_3d(x: np.ndarray,
     """
     x0, x1, x2 = x
     x0_next = (theta_1 * x0 + theta_2 * x1 + theta_3 * x2) * np.exp(-0.1 * (x0 + x1 + x2))
-    x1_next = mortality * x0
-    x2_next = mortality * x1
+    x1_next = survival_1 * x0
+    x2_next = survival_2 * x1
     return np.array([x0_next, x1_next, x2_next])
 
 
@@ -225,3 +229,137 @@ def lorenz_ode(t: float, state: np.ndarray,
     dy_dt = x * (rho - z) - y
     dz_dt = x * y - beta * z
     return [dx_dt, dy_dt, dz_dt]
+
+
+def ives_model(x: np.ndarray,
+               r1: float = 3.873,
+               r2: float = 11.746,
+               c: float = 10**-6.435,
+               d: float = 0.5517,
+               p: float = 0.06659,
+               q: float = 0.902) -> np.ndarray:
+    """
+    Ives et al. (2008) midge-algae-detritus ecological model.
+
+    A discrete-time ecological model capturing the dynamics of midges, algae,
+    and detritus in Lake Myvatn. The model exhibits complex dynamics including
+    multiple stable states and regime shifts.
+
+    Equations:
+        midge_{n+1} = r1 * midge_n * (1 + midge_n / resource)^(-q)
+        algae_{n+1} = r2 * algae_n / (1 + algae_n) - algae_consumed + c
+        detritus_{n+1} = d * detritus_n + algae_n - detritus_consumed + c
+    where:
+        resource = algae_n + p * detritus_n
+        algae_consumed = (algae_n / resource) * midge_{n+1}
+        detritus_consumed = (p * detritus_n / resource) * midge_{n+1}
+
+    Args:
+        x: State vector [midge, algae, detritus] (all non-negative)
+        r1: Midge reproduction rate (default: 3.873)
+        r2: Algae growth rate (default: 11.746)
+        c: Constant input of algae and detritus (default: 10^-6.435)
+        d: Detritus decay rate (default: 0.5517)
+        p: Relative palatability of detritus (default: 0.06659)
+        q: Exponent in midge consumption (default: 0.902)
+
+    Returns:
+        Next state vector [midge, algae, detritus]
+
+    Reference:
+        Ives, A.R., et al., "High-amplitude fluctuations and alternative
+        dynamical states of midges in Lake Myvatn"
+        Nature 452: 84-87 (2008)
+
+    Example:
+        >>> from MorseGraph.systems import ives_model
+        >>> x = np.array([0.23, 0.08, 0.49])  # Near stable point
+        >>> x_next = ives_model(x)
+    """
+    midge, algae, detritus = x[0], x[1], x[2]
+
+    # Enforce non-negativity
+    midge = max(0, midge)
+    algae = max(0, algae)
+    detritus = max(0, detritus)
+
+    # Compute resource availability
+    resource = algae + p * detritus
+
+    # Midge dynamics
+    if resource <= 1e-12:
+        midge_next = 0
+        algae_consumed = 0
+        detritus_consumed = 0
+    else:
+        midge_next = r1 * midge * (1 + midge / resource)**(-q)
+        algae_consumed = (algae / resource) * midge_next
+        detritus_consumed = (p * detritus / resource) * midge_next
+
+    # Algae dynamics
+    algae_produced = r2 * algae / (1 + algae)
+    algae_next = algae_produced - algae_consumed + c
+    if algae_next < c:
+        algae_next = c
+
+    # Detritus dynamics
+    detritus_next = d * detritus + algae - detritus_consumed + c
+    if detritus_next < c:
+        detritus_next = c
+
+    return np.array([midge_next, algae_next, detritus_next])
+
+
+def ives_model_log(log_x: np.ndarray,
+                   r1: float = 3.873,
+                   r2: float = 11.746,
+                   c: float = 10**-6.435,
+                   d: float = 0.5517,
+                   p: float = 0.06659,
+                   q: float = 0.902,
+                   offset: float = 0.001) -> np.ndarray:
+    """
+    Ives et al. (2008) midge-algae-detritus model in log₁₀ coordinates.
+
+    This wrapper transforms the Ives model to operate in log₁₀ space, which
+    is convenient for analysis across many orders of magnitude and matches
+    the coordinate system used in the original publication.
+
+    The transformation is:
+        1. Convert from log₁₀ to linear: x = 10^(log_x)
+        2. Apply dynamics: x_next = ives_model(x)
+        3. Convert back to log₁₀: log_x_next = log₁₀(x_next + offset)
+
+    Args:
+        log_x: State vector in log₁₀ coordinates [log₁₀(midge), log₁₀(algae), log₁₀(detritus)]
+        r1, r2, c, d, p, q: Ives model parameters (see ives_model for details)
+        offset: Small constant added before log transform to avoid log(0) (default: 0.001)
+
+    Returns:
+        Next state vector in log₁₀ coordinates
+
+    Reference:
+        Ives, A.R., et al., "High-amplitude fluctuations and alternative
+        dynamical states of midges in Lake Myvatn"
+        Nature 452: 84-87 (2008)
+        (Figure 1b uses log₁₀ scale with offset 0.001)
+
+    Example:
+        >>> from MorseGraph.systems import ives_model_log
+        >>> log_x = np.array([-0.64, -1.10, -0.31])  # Known stable point in log scale
+        >>> log_x_next = ives_model_log(log_x)
+
+    Note:
+        Typical domain in log₁₀ space: [-7, 7]³ representing abundances
+        from 10^-7 to 10^7.
+    """
+    # Convert from log₁₀ to linear scale
+    x = 10.0**np.array(log_x)
+
+    # Apply dynamics in linear scale
+    x_next = ives_model(x, r1=r1, r2=r2, c=c, d=d, p=p, q=q)
+
+    # Convert back to log₁₀ scale with offset
+    log_x_next = np.log10(x_next + offset)
+
+    return log_x_next
