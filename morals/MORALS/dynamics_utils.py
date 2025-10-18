@@ -23,11 +23,16 @@ class DynamicsUtils:
         self.decoder  = Decoder(config)
         self.dynamics = LatentDynamics(config)
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
 
-        self.encoder = torch.load(os.path.join(config['model_dir'], 'encoder.pt'), map_location=self.device)
-        self.decoder = torch.load(os.path.join(config['model_dir'], 'decoder.pt'), map_location=self.device)
-        self.dynamics = torch.load(os.path.join(config['model_dir'], 'dynamics.pt'), map_location=self.device)
+        self.encoder = torch.load(os.path.join(config['model_dir'], 'encoder.pt'), map_location=self.device, weights_only=False)
+        self.decoder = torch.load(os.path.join(config['model_dir'], 'decoder.pt'), map_location=self.device, weights_only=False)
+        self.dynamics = torch.load(os.path.join(config['model_dir'], 'dynamics.pt'), map_location=self.device, weights_only=False)
 
         self.encoder.to(self.device)
         self.decoder.to(self.device)

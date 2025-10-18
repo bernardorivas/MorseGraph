@@ -4,6 +4,7 @@ from MORALS.systems.cartpole import Cartpole
 from MORALS.systems.bistable import Bistable
 from MORALS.systems.N_CML import N_CML
 from MORALS.systems.leslie_map import Leslie_map
+from MORALS.systems.leslie_map_3d import Leslie_map_3d
 from MORALS.systems.humanoid import Humanoid
 from MORALS.systems.trifinger import Trifinger
 from MORALS.systems.bistable_rot import Bistable_Rot
@@ -23,6 +24,8 @@ def get_system(name, dims=10, **kwargs):
         system = N_CML(**kwargs)
     elif name == "leslie_map":
         system = Leslie_map(**kwargs)
+    elif name == "leslie_map_3d":
+        system = Leslie_map_3d(**kwargs)
     elif name == "humanoid":
         system = Humanoid(**kwargs)
     elif name == "trifinger":

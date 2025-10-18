@@ -51,7 +51,12 @@ class Training:
 
         self.verbose = bool(verbose)
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
         print("Device: ", self.device)
 
         self.encoder.to(self.device)
@@ -129,7 +134,7 @@ class Training:
         list_parameters = (weight_bool[0] or weight_bool[1] or weight_bool[2]) * (list(self.encoder.parameters()) + list(self.decoder.parameters()))
         list_parameters += (weight_bool[1] or weight_bool[2]) * list(self.dynamics.parameters())
         optimizer = torch.optim.Adam(list_parameters, lr=self.lr)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, threshold=0.001, patience=patience, verbose=True)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, threshold=0.001, patience=patience)
         for epoch in tqdm(range(epochs)):
             loss_ae1_train = 0
             loss_ae2_train = 0

@@ -69,8 +69,7 @@ if __name__ == "__main__":
         upper_bounds = true_bounds[1]
         X = grid_points(lower_bounds, upper_bounds, num_trajs)
 
-    if args.system == "bistable" or args.system == "bistable_rot":
-
+    if args.system == "bistable" or args.system == "bistable_rot" or args.system == "leslie_map_3d":
         f = system.f
 
     else:

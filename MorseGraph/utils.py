@@ -791,3 +791,558 @@ def compute_train_val_divergence(similarity_train: Dict, similarity_val: Dict) -
         'attractor_divergence': attractor_div,
         'edge_divergence': edge_div,
     }
+
+
+# =============================================================================
+# Experiment Configuration and Management
+# =============================================================================
+
+class ExperimentConfig:
+    """
+    Base configuration class for 3D map experiments with learning pipeline.
+
+    This class centralizes all parameters for:
+    - Domain specification
+    - CMGDB parameters for 3D Morse graph computation
+    - Data generation settings
+    - Neural network architecture
+    - Training parameters
+    - Latent space parameters
+
+    Can be subclassed for specific dynamical systems.
+
+    Example:
+        >>> config = ExperimentConfig(
+        ...     domain_bounds=[[-10, -10, -10], [10, 10, 10]],
+        ...     subdiv_min=30,
+        ...     subdiv_max=42
+        ... )
+        >>> config.set_map_func(my_map_function)
+    """
+
+    def __init__(
+        self,
+        # Domain specification
+        domain_bounds: List[List[float]] = None,
+
+        # CMGDB parameters for 3D
+        subdiv_min: int = 30,
+        subdiv_max: int = 42,
+        subdiv_init: int = 0,
+        subdiv_limit: int = 10000,
+        padding: bool = True,
+
+        # Data generation
+        n_trajectories: int = 5000,
+        n_points: int = 20,
+        skip_initial: int = 0,
+        random_seed: Optional[int] = 42,
+
+        # Model architecture
+        input_dim: int = 3,
+        latent_dim: int = 2,
+        hidden_dim: int = 32,
+        num_layers: int = 3,
+        output_activation: Optional[str] = None,
+        encoder_activation: Optional[str] = None,
+        decoder_activation: Optional[str] = None,
+        latent_dynamics_activation: Optional[str] = None,
+
+        # Training parameters
+        num_epochs: int = 1500,
+        batch_size: int = 1024,
+        learning_rate: float = 0.001,
+        early_stopping_patience: int = 50,
+        min_delta: float = 1e-5,
+
+        # Loss weights
+        w_recon: float = 1.0,
+        w_dyn_recon: float = 1.0,
+        w_dyn_cons: float = 1.0,
+
+        # Latent space parameters
+        latent_subdiv_min: int = 20,
+        latent_subdiv_max: int = 28,
+        latent_subdiv_init: int = 0,
+        latent_subdiv_limit: int = 10000,
+        latent_padding: bool = True,
+        latent_bounds_padding: float = 1.01,
+
+        # Large sample for domain-restricted computation
+        large_sample_size: Optional[int] = None,
+        target_points_per_box: int = 2,
+    ):
+        """
+        Initialize experiment configuration.
+
+        Args:
+            domain_bounds: [[lower_bounds], [upper_bounds]] for 3D domain
+            subdiv_min, subdiv_max, subdiv_init, subdiv_limit: CMGDB subdivision parameters for 3D
+            padding: Whether to use padding in BoxMap computation
+            n_trajectories: Number of trajectories for training data
+            n_points: Points per trajectory
+            skip_initial: Initial iterations to skip
+            random_seed: Random seed for reproducibility
+            input_dim: Input dimension (should be 3)
+            latent_dim: Latent space dimension (typically 2)
+            hidden_dim: Hidden layer dimension
+            num_layers: Number of hidden layers
+            output_activation: Default activation for all networks
+            encoder_activation, decoder_activation, latent_dynamics_activation: Per-network overrides
+            num_epochs: Training epochs
+            batch_size: Batch size for training
+            learning_rate: Learning rate
+            early_stopping_patience: Early stopping patience
+            min_delta: Minimum improvement for early stopping
+            w_recon, w_dyn_recon, w_dyn_cons: Loss weights
+            latent_subdiv_min, latent_subdiv_max: CMGDB parameters for 2D latent space
+            latent_padding: Padding for latent BoxMap
+            latent_bounds_padding: Padding factor for latent bounding box
+            large_sample_size: Size of large sample for domain-restricted computation
+            target_points_per_box: Target density for large sample estimation
+        """
+        # Domain
+        self.domain_bounds = domain_bounds or [[-10, -10, -10], [10, 10, 10]]
+
+        # 3D CMGDB
+        self.subdiv_min = subdiv_min
+        self.subdiv_max = subdiv_max
+        self.subdiv_init = subdiv_init
+        self.subdiv_limit = subdiv_limit
+        self.padding = padding
+
+        # Data generation
+        self.n_trajectories = n_trajectories
+        self.n_points = n_points
+        self.skip_initial = skip_initial
+        self.random_seed = random_seed
+
+        # Architecture
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.output_activation = output_activation
+        self.encoder_activation = encoder_activation
+        self.decoder_activation = decoder_activation
+        self.latent_dynamics_activation = latent_dynamics_activation
+
+        # Training
+        self.num_epochs = num_epochs
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.early_stopping_patience = early_stopping_patience
+        self.min_delta = min_delta
+
+        # Loss weights
+        self.w_recon = w_recon
+        self.w_dyn_recon = w_dyn_recon
+        self.w_dyn_cons = w_dyn_cons
+
+        # Latent space
+        self.latent_subdiv_min = latent_subdiv_min
+        self.latent_subdiv_max = latent_subdiv_max
+        self.latent_subdiv_init = latent_subdiv_init
+        self.latent_subdiv_limit = latent_subdiv_limit
+        self.latent_padding = latent_padding
+        self.latent_bounds_padding = latent_bounds_padding
+
+        # Large sample
+        self.large_sample_size = large_sample_size
+        self.target_points_per_box = target_points_per_box
+
+        # Map function (to be set)
+        self.map_func = None
+
+    def set_map_func(self, map_func: Callable):
+        """Set the map function f: R^3 -> R^3."""
+        self.map_func = map_func
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert configuration to dictionary."""
+        return {
+            'domain_bounds': self.domain_bounds,
+            'subdiv_min': self.subdiv_min,
+            'subdiv_max': self.subdiv_max,
+            'subdiv_init': self.subdiv_init,
+            'subdiv_limit': self.subdiv_limit,
+            'padding': self.padding,
+            'n_trajectories': self.n_trajectories,
+            'n_points': self.n_points,
+            'skip_initial': self.skip_initial,
+            'random_seed': self.random_seed,
+            'input_dim': self.input_dim,
+            'latent_dim': self.latent_dim,
+            'hidden_dim': self.hidden_dim,
+            'num_layers': self.num_layers,
+            'output_activation': self.output_activation,
+            'encoder_activation': self.encoder_activation,
+            'decoder_activation': self.decoder_activation,
+            'latent_dynamics_activation': self.latent_dynamics_activation,
+            'num_epochs': self.num_epochs,
+            'batch_size': self.batch_size,
+            'learning_rate': self.learning_rate,
+            'early_stopping_patience': self.early_stopping_patience,
+            'min_delta': self.min_delta,
+            'w_recon': self.w_recon,
+            'w_dyn_recon': self.w_dyn_recon,
+            'w_dyn_cons': self.w_dyn_cons,
+            'latent_subdiv_min': self.latent_subdiv_min,
+            'latent_subdiv_max': self.latent_subdiv_max,
+            'latent_subdiv_init': self.latent_subdiv_init,
+            'latent_subdiv_limit': self.latent_subdiv_limit,
+            'latent_padding': self.latent_padding,
+            'latent_bounds_padding': self.latent_bounds_padding,
+            'large_sample_size': self.large_sample_size,
+            'target_points_per_box': self.target_points_per_box,
+        }
+
+
+def setup_experiment_dirs(base_dir: str) -> Dict[str, str]:
+    """
+    Create organized directory structure for experiment outputs.
+
+    Args:
+        base_dir: Base directory for this experiment
+
+    Returns:
+        Dictionary with paths to subdirectories:
+            - 'base': Base directory
+            - 'training_data': Training data directory
+            - 'models': Model checkpoints directory
+            - 'results': Results and visualizations directory
+
+    Example:
+        >>> dirs = setup_experiment_dirs('/path/to/experiment')
+        >>> save_trajectory_data(os.path.join(dirs['training_data'], 'data.npz'), X, Y, trajs, {})
+    """
+    dirs = {
+        'base': base_dir,
+        'training_data': os.path.join(base_dir, 'training_data'),
+        'models': os.path.join(base_dir, 'models'),
+        'results': os.path.join(base_dir, 'results'),
+    }
+
+    for dir_path in dirs.values():
+        os.makedirs(dir_path, exist_ok=True)
+
+    return dirs
+
+
+def save_experiment_metadata(
+    filepath: str,
+    config: ExperimentConfig,
+    results: Dict[str, Any]
+) -> None:
+    """
+    Save experiment configuration and results to JSON.
+
+    Args:
+        filepath: Path to save JSON file
+        config: ExperimentConfig instance
+        results: Dictionary of experiment results
+
+    Example:
+        >>> save_experiment_metadata(
+        ...     'experiment/metadata.json',
+        ...     config,
+        ...     {'num_morse_sets_3d': 4, 'final_train_loss': 0.0012}
+        ... )
+    """
+    import json
+    from datetime import datetime
+
+    metadata = {
+        'timestamp': datetime.now().isoformat(),
+        'configuration': config.to_dict(),
+        'results': results,
+    }
+
+    with open(filepath, 'w') as f:
+        json.dump(metadata, f, indent=2)
+
+    print(f"  Saved experiment metadata to: {filepath}")
+
+
+# =============================================================================
+# CMGDB Caching Utilities
+# =============================================================================
+
+def compute_parameter_hash(
+    func,
+    domain_bounds,
+    subdiv_min,
+    subdiv_max,
+    subdiv_init,
+    subdiv_limit,
+    padding,
+    extra_params=None
+) -> str:
+    """
+    Compute unique hash for CMGDB computation parameters.
+
+    This hash is used as a cache key to avoid recomputing Morse graphs
+    with identical parameters. The hash includes:
+    - Function source code (to detect if map changed)
+    - Domain bounds
+    - All CMGDB subdivision parameters
+    - Optional extra parameters (for 2D computations with learned models)
+
+    Args:
+        func: Map function (will hash its source code)
+        domain_bounds: Domain boundaries
+        subdiv_min, subdiv_max, subdiv_init, subdiv_limit: CMGDB parameters
+        padding: Whether padding is used
+        extra_params: Optional dict of additional parameters to include in hash
+
+    Returns:
+        SHA256 hash string (first 16 characters for readability)
+
+    Example:
+        >>> hash_key = compute_parameter_hash(
+        ...     my_map_func,
+        ...     [[-5,-5,-5], [5,5,5]],
+        ...     subdiv_min=30,
+        ...     subdiv_max=42,
+        ...     subdiv_init=0,
+        ...     subdiv_limit=10000,
+        ...     padding=True
+        ... )
+    """
+    import hashlib
+    import json
+    import inspect
+    import functools
+
+    # Create parameter dictionary
+    params = {
+        'domain_bounds': domain_bounds,
+        'subdiv_min': subdiv_min,
+        'subdiv_max': subdiv_max,
+        'subdiv_init': subdiv_init,
+        'subdiv_limit': subdiv_limit,
+        'padding': padding,
+    }
+
+    if extra_params is not None:
+        params['extra_params'] = extra_params
+
+    # Try to get function source code for hashing
+    # If not available (e.g., built-in or lambda), use function name
+    try:
+        func_source = inspect.getsource(func)
+    except (OSError, TypeError):
+        # Fallback for partial functions or other callables
+        if isinstance(func, functools.partial):
+            # Access the original function from the partial object
+            func_source = f"{func.func.__module__}.{func.func.__name__}"
+        else:
+            # Fallback for other cases (e.g., built-in functions)
+            func_source = f"{func.__module__}.{func.__name__}"
+
+
+    params['function_source'] = func_source
+
+    # Create sorted JSON string for consistent hashing
+    params_str = json.dumps(params, sort_keys=True)
+
+    # Compute SHA256 hash
+    hash_obj = hashlib.sha256(params_str.encode('utf-8'))
+    hash_full = hash_obj.hexdigest()
+
+    # Return first 16 characters for readability
+    return hash_full[:16]
+
+
+def get_cache_path(cache_dir: str, param_hash: str) -> Dict[str, str]:
+    """
+    Get cache file paths for a given parameter hash.
+
+    Args:
+        cache_dir: Base cache directory
+        param_hash: Parameter hash from compute_parameter_hash()
+
+    Returns:
+        Dictionary with paths:
+            - 'dir': Cache subdirectory for this hash
+            - 'morse_graph': Path to morse_graph_data.mgdb
+            - 'barycenters': Path to barycenters.npz
+            - 'metadata': Path to metadata.json
+
+    Example:
+        >>> paths = get_cache_path('/path/to/cache', 'a1b2c3d4e5f6g7h8')
+        >>> print(paths['morse_graph'])
+        /path/to/cache/a1b2c3d4e5f6g7h8/morse_graph_data.mgdb
+    """
+    cache_subdir = os.path.join(cache_dir, param_hash)
+
+    return {
+        'dir': cache_subdir,
+        'morse_graph': os.path.join(cache_subdir, 'morse_graph_data.mgdb'),
+        'barycenters': os.path.join(cache_subdir, 'barycenters.npz'),
+        'metadata': os.path.join(cache_subdir, 'metadata.json'),
+    }
+
+
+def save_morse_graph_cache(
+    morse_graph,
+    map_graph,
+    barycenters: Dict[int, list],
+    metadata: Dict[str, Any],
+    cache_dir: str,
+    param_hash: str,
+    verbose: bool = True
+) -> None:
+    """
+    Save CMGDB Morse graph computation to cache.
+
+    Saves three files to enable future loading:
+    1. morse_graph_data.mgdb: CMGDB native format with morse_graph + map_graph
+    2. barycenters.npz: NumPy archive of barycenter coordinates
+    3. metadata.json: Parameters and computation info
+
+    Args:
+        morse_graph: CMGDB MorseGraph object
+        map_graph: CMGDB MapGraph object
+        barycenters: Dict mapping Morse set index to list of barycenter arrays
+        metadata: Dictionary of parameters and computation info
+        cache_dir: Base cache directory
+        param_hash: Parameter hash (from compute_parameter_hash)
+        verbose: Whether to print progress messages
+
+    Example:
+        >>> save_morse_graph_cache(
+        ...     morse_graph, map_graph, barycenters,
+        ...     {'subdiv_min': 30, 'computation_time': 120.5},
+        ...     cache_dir='/path/to/cache',
+        ...     param_hash='a1b2c3d4e5f6g7h8'
+        ... )
+    """
+    import json
+    from datetime import datetime
+
+    try:
+        import CMGDB
+    except ImportError:
+        if verbose:
+            print("  WARNING: CMGDB not available, cannot save cache")
+        return
+
+    # Get cache paths
+    paths = get_cache_path(cache_dir, param_hash)
+
+    # Create cache directory
+    os.makedirs(paths['dir'], exist_ok=True)
+
+    # Save barycenters
+    barycenters_to_save = {
+        f'morse_set_{k}': np.array(v) if v else np.array([])
+        for k, v in barycenters.items()
+    }
+    if barycenters_to_save:
+        np.savez(paths['barycenters'], **barycenters_to_save)
+
+    # Add timestamp to metadata
+    metadata_with_timestamp = metadata.copy()
+    metadata_with_timestamp['cached_at'] = datetime.now().isoformat()
+    metadata_with_timestamp['param_hash'] = param_hash
+
+    # Save metadata
+    with open(paths['metadata'], 'w') as f:
+        json.dump(metadata_with_timestamp, f, indent=2)
+
+    # Save CMGDB data
+    CMGDB.SaveMorseGraphData(
+        morse_graph,
+        map_graph,
+        paths['morse_graph'],
+        metadata=metadata_with_timestamp
+    )
+
+    if verbose:
+        print(f"  Cached Morse graph to: {paths['dir']}")
+
+
+def load_morse_graph_cache(
+    cache_dir: str,
+    param_hash: str,
+    verbose: bool = True
+) -> Optional[Dict[str, Any]]:
+    """
+    Load CMGDB Morse graph from cache if it exists.
+
+    Args:
+        cache_dir: Base cache directory
+        param_hash: Parameter hash to look for
+        verbose: Whether to print progress messages
+
+    Returns:
+        Dictionary with loaded data if cache exists, None otherwise:
+            - 'morse_graph': CMGDB MorseGraph object
+            - 'barycenters': Dict mapping Morse set index to list of barycenters
+            - 'metadata': Cached metadata dict
+            - 'num_morse_sets': Number of Morse sets
+        Returns None if cache not found or load fails.
+
+    Example:
+        >>> cached = load_morse_graph_cache('/path/to/cache', 'a1b2c3d4e5f6g7h8')
+        >>> if cached is not None:
+        ...     morse_graph = cached['morse_graph']
+        ...     print(f"Loaded {cached['num_morse_sets']} Morse sets from cache")
+    """
+    import json
+
+    try:
+        import CMGDB
+    except ImportError:
+        if verbose:
+            print("  WARNING: CMGDB not available, cannot load cache")
+        return None
+
+    # Get cache paths
+    paths = get_cache_path(cache_dir, param_hash)
+
+    # Check if cache exists
+    if not os.path.exists(paths['morse_graph']):
+        return None
+
+    try:
+        # Load morse graph
+        morse_graph = CMGDB.MorseGraph(paths['morse_graph'])
+
+        # Load barycenters
+        barycenters = {}
+        if os.path.exists(paths['barycenters']):
+            barycenters_data = np.load(paths['barycenters'], allow_pickle=True)
+            for key in barycenters_data.files:
+                morse_set_idx = int(key.split('_')[-1])
+                barys_array = barycenters_data[key]
+                if barys_array.size > 0:
+                    # Convert back to list of arrays
+                    if barys_array.ndim == 1:
+                        barycenters[morse_set_idx] = [barys_array]
+                    else:
+                        barycenters[morse_set_idx] = [barys_array[i] for i in range(len(barys_array))]
+                else:
+                    barycenters[morse_set_idx] = []
+
+        # Load metadata
+        metadata = {}
+        if os.path.exists(paths['metadata']):
+            with open(paths['metadata'], 'r') as f:
+                metadata = json.load(f)
+
+        if verbose:
+            print(f"  Loaded Morse graph from cache: {paths['dir']}")
+
+        return {
+            'morse_graph': morse_graph,
+            'barycenters': barycenters,
+            'metadata': metadata,
+            'num_morse_sets': morse_graph.num_vertices(),
+        }
+
+    except Exception as e:
+        if verbose:
+            print(f"  WARNING: Failed to load cache: {e}")
+        return None
