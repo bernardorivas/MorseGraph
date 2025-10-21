@@ -1,0 +1,124 @@
+================================================================================
+IVES MODEL - REFERENCE ATTRACTORS
+================================================================================
+Parameters:
+  r1 = 3.873
+  r2 = 11.746
+  c  = 10^-6.435 = 3.672823e-07
+  d  = 0.5517
+  p  = 0.06659
+  q  = 0.9026
+  offset = 0.001 (for log transformation)
+
+Reference: Ives et al. (2008) Nature 452: 84-87
+
+================================================================================
+EQUILIBRIUM POINT (Stable Fixed Point)
+================================================================================
+
+Linear Space [Midge, Algae, Detritus]:
+  [6.19561921, 1.62051128, 2.38244506]
+
+Log10 Space [log10(Midge), log10(Algae), log10(Detritus)]:
+  [0.792107, 0.209010, 0.376449]
+
+
+================================================================================
+PERIOD-12 LIMIT CYCLE (Stable Periodic Orbit)
+================================================================================
+
+Point 1/12:
+  Linear:  [ 2.46381523,  8.15839955, 11.10758835]
+  Log10:   [ 0.39160862,  0.91157773,  1.04565088]
+
+Point 2/12:
+  Linear:  [ 7.65315228,  3.44648095, 13.65028504]
+  Log10:   [ 0.88385738,  0.53734751,  1.13513858]
+
+Point 3/12:
+  Linear:  [1.18666837e+01, 3.67282300e-07, 8.50079570e+00]
+  Log10:   [ 1.07430764, -6.43509285,  0.92947376]
+
+Point 4/12:
+  Linear:  [2.82722186e+00, 2.84699140e-06, 1.86266969e+00]
+  Log10:   [ 0.45130625, -5.54559063,  0.27018157]
+
+Point 5/12:
+  Linear:  [6.26644525e-01, 1.94248456e-05, 4.01007942e-01]
+  Log10:   [-0.20292393, -4.71170433, -0.39687693]
+
+Point 6/12:
+  Linear:  [1.35521350e-01, 1.30015458e-04, 8.58330352e-02]
+  Log10:   [-0.86801275, -3.88600855, -1.06627693]
+
+Point 7/12:
+  Linear:  [0.02960013, 0.00086898, 0.01854269]
+  Log10:   [-1.52871692, -3.06107992, -1.73180035]
+
+Point 8/12:
+  Linear:  [0.00990762, 0.00610606, 0.00528422]
+  Log10:   [-2.00400249, -2.21426366, -2.27701846]
+
+Point 9/12:
+  Linear:  [0.01657729, 0.05561282, 0.00811848]
+  Log10:   [-1.78041095, -1.25478013, -2.09052584]
+
+Point 10/12:
+  Linear:  [0.05083485, 0.56846908, 0.05960274]
+  Log10:   [-1.29374168, -0.24533912, -1.22475073]
+
+Point 11/12:
+  Linear:  [0.18233003, 4.07610344, 0.60008811]
+  Log10:   [-0.73907562,  0.61025016, -0.22181353]
+
+Point 12/12:
+  Linear:  [0.6790708 , 8.75954253, 4.40057981]
+  Log10:   [-0.16807606,  0.94248423,  0.64356429]
+
+
+================================================================================
+DOMAIN REQUIREMENTS
+================================================================================
+
+To contain all attractor points, the log10 domain must include:
+
+Dimension 0 (Midge):
+  Min: -2.00400249 (point 8 of period-12)
+  Max:  1.07430764 (point 3 of period-12)
+  Suggested range: [-2.5, 1.5] (with margin)
+
+Dimension 1 (Algae):
+  Min: -6.43509285 (point 3 of period-12) ← CRASHES TO FLOOR!
+  Max:  0.94248423 (point 12 of period-12)
+  Suggested range: [-7.0, 1.5] (with margin)
+
+Dimension 2 (Detritus):
+  Min: -2.27701846 (point 8 of period-12)
+  Max:  1.13513858 (point 2 of period-12)
+  Suggested range: [-2.5, 1.5] (with margin)
+
+Overall suggested domain in log10 space:
+  Lower: [-2.5, -7.0, -2.5]
+  Upper: [ 1.5,  1.5,  1.5]
+
+Note: Point 3 of the period-12 orbit has algae ≈ 3.67e-07, which is essentially
+the floor parameter c. This is where the population "crashes" and then recovers.
+
+================================================================================
+BASIN OF ATTRACTION NOTES
+================================================================================
+
+From sampling 100 random ICs in linear space:
+  - Equilibrium basin: ~85% of ICs
+  - Period-12 basin:   ~15% of ICs
+
+The period-12 basin is SMALLER than the equilibrium basin, suggesting:
+  1. The basin boundary is relatively close to the period-12 orbit
+  2. Small perturbations can cause trajectories to escape to equilibrium
+  3. The period-12 orbit is technically stable but has a limited basin
+
+This is consistent with "alternative dynamical states" described in the paper:
+depending on initial conditions, the system converges to either the equilibrium
+or the period-12 cycle.
+
+================================================================================

@@ -1,0 +1,98 @@
+# ==============================================================================
+# Ives Ecological Model - MORALS Configuration
+# ==============================================================================
+#
+# Configuration matching the MORALS (Model-based Reachability Analysis of
+# Latent Space) approach for learning reduced-order representations.
+#
+# Key MORALS characteristics:
+# - Shallow network architecture (1 hidden layer)
+# - Strong reconstruction weight (500.0x)
+# - Specific activation functions (tanh/sigmoid/tanh)
+# - More training trajectories (5000)
+#
+# Based on: Ives et al. (2008) "High-amplitude fluctuations and alternative
+#           dynamical states of midges in Lake Myvatn", Nature 452: 84-87
+
+# System metadata
+system:
+  name: "Ives Ecological Model (MORALS)"
+  type: "map"
+  description: "Midge-Algae-Detritus dynamics with MORALS-style learning"
+  reference: "Ives et al. (2008), Nature 452: 84-87"
+
+# Ecological parameters for the Ives model
+dynamics:
+  r1: 3.873           # Midge reproduction rate
+  r2: 11.746          # Algae growth rate
+  c: 3.67e-07         # Constant input of algae and detritus
+  d: 0.5517           # Detritus decay rate
+  p: 0.06659          # Relative palatability of detritus
+  q: 0.9026           # Exponent in midge consumption
+  log_offset: 0.00   # Offset for log transform to avoid log(0)
+
+# Computational domain in log10 scale
+domain:
+  bounds: [[-5, -20, -8], [10, 20, 8]]  # [[log(M), log(A), log(D)], ...]
+  equilibrium: [0.792107, 0.209010, 0.376449]  # Equilibrium point (log scale)
+
+# 3D CMGDB parameters for original space
+cmgdb_3d:
+  subdiv_min: 33      # Minimum subdivision depth (2^N total boxes)
+  subdiv_max: 33      # Maximum subdivision depth (equal to min for uniform grid)
+  subdiv_init: 0      # Initial subdivision depth (0 to start at subdiv_min)
+  subdiv_limit: 100000  # Maximum number of boxes to prevent runaway refinement
+  padding: false      # Disable boundary padding
+
+# 2D CMGDB parameters for latent space
+cmgdb_2d:
+  subdiv_min: 20      # Minimum subdivision depth for latent space (MORALS default)
+  subdiv_max: 28      # Maximum subdivision depth (MORALS default)
+  subdiv_init: 0      # Initial subdivision
+  subdiv_limit: 10000  # Maximum number of boxes (MORALS default)
+  padding: true       # Padding for latent space
+  bounds_padding: 1.01  # Factor for bounding box of latent bounds (MORALS default)
+
+# Training data generation
+training:
+  n_trajectories: 5000  # Number of random trajectories (MORALS uses 5000)
+  n_points: 20          # Points to sample from each trajectory
+  skip_initial: 0       # Number of initial points to skip (transient)
+  random_seed: 42       # Random seed for reproducibility
+
+  # Neural network training
+  num_epochs: 1500              # Maximum training epochs
+  batch_size: 1024              # Batch size for training
+  learning_rate: 0.001          # Learning rate
+  early_stopping_patience: 50   # Epochs to wait for improvement
+  min_delta: 1.0e-5             # Minimum change to count as improvement
+
+# Neural network architecture (MORALS-style)
+# Using advanced mode to explicitly show component-specific architecture
+# (MORALS uses same shallow architecture for all components)
+model:
+  input_dim: 3          # Input dimension (M, A, D in log scale)
+  latent_dim: 2         # Latent space dimension
+
+  # Advanced mode: Component-specific architecture (all shallow for MORALS)
+  encoder_hidden_dim: 32
+  encoder_num_layers: 1         # Shallow encoder
+  encoder_activation: tanh
+
+  decoder_hidden_dim: 32
+  decoder_num_layers: 1         # Shallow decoder
+  decoder_activation: sigmoid
+
+  latent_dynamics_hidden_dim: 32
+  latent_dynamics_num_layers: 1  # Shallow dynamics for interpretability
+  latent_dynamics_activation: tanh
+
+# Loss function weights (MORALS-specific)
+loss_weights:
+  w_recon: 500.0        # Reconstruction loss weight (MORALS uses strong reconstruction)
+  w_dyn_recon: 1.0      # Dynamics reconstruction loss weight
+  w_dyn_cons: 1.0       # Dynamics consistency loss weight
+
+# Visualization parameters
+visualization:
+  n_grid_points: 50     # Grid resolution for encoder/decoder round-trip analysis

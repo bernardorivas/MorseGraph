@@ -1,0 +1,112 @@
+# ==============================================================================
+# Ives Ecological Model - Default Configuration
+# ==============================================================================
+#
+# This is the default configuration for the Ives midge-algae-detritus model.
+# Based on: Ives et al. (2008) "High-amplitude fluctuations and alternative
+#           dynamical states of midges in Lake Myvatn", Nature 452: 84-87
+#
+# The model operates in log10 scale to handle many orders of magnitude in
+# population abundances.
+
+# System metadata
+system:
+  name: "Ives Ecological Model"
+  type: "map"
+  description: "Midge-Algae-Detritus dynamics in log10 scale"
+  reference: "Ives et al. (2008), Nature 452: 84-87"
+
+# Ecological parameters for the Ives model
+dynamics:
+  r1: 3.873           # Midge reproduction rate
+  r2: 11.746          # Algae growth rate
+  c: 3.67e-07         # Constant input of algae and detritus
+  d: 0.5517           # Detritus decay rate
+  p: 0.06659          # Relative palatability of detritus
+  q: 0.9026           # Exponent in midge consumption
+  log_offset: 0.00   # Offset for log transform to avoid log(0) (has to be less than 1e-7)
+
+# Computational domain in log10 scale
+# Updated to contain both equilibrium and period-12 orbit (see reference_orbits.txt)
+domain:
+  bounds: [[-2.5, -7.0, -2.5], [1.5, 1.5, 1.5]]  # [[log(M), log(A), log(D)], ...]
+  equilibrium: [0.792107, 0.209010, 0.376449]  # Equilibrium point (log scale)
+
+  # Period-12 orbit points (log10 scale) for visualization
+  period_12_orbit:
+    - [ 0.39160862,  0.91157773,  1.04565088]  # Point 1/12
+    - [ 0.88385738,  0.53734751,  1.13513858]  # Point 2/12
+    - [ 1.07430764, -6.43509285,  0.92947376]  # Point 3/12 (crashes to floor)
+    - [ 0.45130625, -5.54559063,  0.27018157]  # Point 4/12
+    - [-0.20292393, -4.71170433, -0.39687693]  # Point 5/12
+    - [-0.86801275, -3.88600855, -1.06627693]  # Point 6/12
+    - [-1.52871692, -3.06107992, -1.73180035]  # Point 7/12
+    - [-2.00400249, -2.21426366, -2.27701846]  # Point 8/12 (min midge)
+    - [-1.78041095, -1.25478013, -2.09052584]  # Point 9/12
+    - [-1.29374168, -0.24533912, -1.22475073]  # Point 10/12
+    - [-0.73907562,  0.61025016, -0.22181353]  # Point 11/12
+    - [-0.16807606,  0.94248423,  0.64356429]  # Point 12/12
+
+# 3D CMGDB parameters for original space
+cmgdb_3d:
+  subdiv_min: 33      # Minimum subdivision depth (2^N total boxes)
+  subdiv_max: 39      # Maximum subdivision depth (equal to min for uniform grid)
+  subdiv_init: 0      # Initial subdivision depth (0 to start at subdiv_min)
+  subdiv_limit: 100000  # Maximum number of boxes to prevent runaway refinement
+  padding: false      # Disable boundary padding
+
+# 2D CMGDB parameters for latent space
+cmgdb_2d:
+  subdiv_min: 16      # Minimum subdivision depth for latent space
+  subdiv_max: 20      # Maximum subdivision depth
+  subdiv_init: 0      # Initial subdivision
+  subdiv_limit: 100000  # Maximum number of boxes
+  padding: true       # Padding for latent space
+  bounds_padding: 1.01  # Factor for bounding box of latent bounds
+  original_grid_subdiv: 24  # Subdivision for uniform grid in original space (2^(N/3) points per dim)
+
+# Training data generation
+training:
+  n_trajectories: 1000  # Number of random trajectories to generate
+  n_points: 20          # Points to sample from each trajectory
+  skip_initial: 0       # Number of initial points to skip (transient)
+  random_seed: 42       # Random seed for reproducibility
+
+  # Neural network training
+  num_epochs: 1500              # Maximum training epochs
+  batch_size: 1024              # Batch size for training
+  learning_rate: 0.001          # Learning rate
+  early_stopping_patience: 50   # Epochs to wait for improvement
+  min_delta: 1.0e-5             # Minimum change to count as improvement
+
+# Neural network architecture
+model:
+  input_dim: 3          # Input dimension
+  latent_dim: 2         # Latent space dimension
+
+  # Shared architecture across all components
+  hidden_dim: 32        # Hidden layer dimension (shared)
+  num_layers: 1 # 3         # Number of hidden layers (shared)
+
+  # Activation functions (component-specific)
+  encoder_activation: 'tanh' # null      # Encoder output activation ('tanh', 'sigmoid', 'relu', null)
+  decoder_activation: 'sigmoid' # null      # Decoder output activation ('tanh', 'sigmoid', 'relu', null)
+  latent_dynamics_activation: 'tanh' # null  # Latent dynamics output activation ('tanh', 'sigmoid', 'relu', null)
+
+  # Optional: Uncomment and use these to specify component-specific architectures
+  # encoder_hidden_dim: 64
+  # encoder_num_layers: 3
+  # decoder_hidden_dim: 64
+  # decoder_num_layers: 3
+  # latent_dynamics_hidden_dim: 32
+  # latent_dynamics_num_layers: 1  # Often simpler for interpretable dynamics
+
+# Loss function weights
+loss_weights:
+  w_recon: 100.0          # Reconstruction loss weight
+  w_dyn_recon: 1.0      # Dynamics reconstruction loss weight
+  w_dyn_cons: 1.0       # Dynamics consistency loss weight
+
+# Visualization parameters
+visualization:
+  n_grid_points: 50     # Grid resolution for encoder/decoder round-trip analysis

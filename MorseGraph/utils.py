@@ -838,7 +838,7 @@ class ExperimentConfig:
         skip_initial: int = 0,
         random_seed: Optional[int] = 42,
 
-        # Model architecture
+        # Model architecture - Simple mode (shared)
         input_dim: int = 3,
         latent_dim: int = 2,
         hidden_dim: int = 32,
@@ -847,6 +847,14 @@ class ExperimentConfig:
         encoder_activation: Optional[str] = None,
         decoder_activation: Optional[str] = None,
         latent_dynamics_activation: Optional[str] = None,
+
+        # Model architecture - Advanced mode (component-specific)
+        encoder_hidden_dim: Optional[int] = None,
+        encoder_num_layers: Optional[int] = None,
+        decoder_hidden_dim: Optional[int] = None,
+        decoder_num_layers: Optional[int] = None,
+        latent_dynamics_hidden_dim: Optional[int] = None,
+        latent_dynamics_num_layers: Optional[int] = None,
 
         # Training parameters
         num_epochs: int = 1500,
@@ -867,13 +875,21 @@ class ExperimentConfig:
         latent_subdiv_limit: int = 10000,
         latent_padding: bool = True,
         latent_bounds_padding: float = 1.01,
+        original_grid_subdiv: int = 15,
 
         # Large sample for domain-restricted computation
         large_sample_size: Optional[int] = None,
         target_points_per_box: int = 2,
+
+        # Visualization parameters
+        n_grid_points: int = 20,
     ):
         """
         Initialize experiment configuration.
+
+        Supports two architecture modes:
+        - Simple mode: Use shared hidden_dim and num_layers for all components
+        - Advanced mode: Use component-specific parameters (encoder_hidden_dim, etc.)
 
         Args:
             domain_bounds: [[lower_bounds], [upper_bounds]] for 3D domain
@@ -885,10 +901,13 @@ class ExperimentConfig:
             random_seed: Random seed for reproducibility
             input_dim: Input dimension (should be 3)
             latent_dim: Latent space dimension (typically 2)
-            hidden_dim: Hidden layer dimension
-            num_layers: Number of hidden layers
-            output_activation: Default activation for all networks
-            encoder_activation, decoder_activation, latent_dynamics_activation: Per-network overrides
+            hidden_dim: Hidden layer dimension (simple mode)
+            num_layers: Number of hidden layers (simple mode)
+            output_activation: Default activation for all networks (deprecated)
+            encoder_activation, decoder_activation, latent_dynamics_activation: Per-network activations
+            encoder_hidden_dim, encoder_num_layers: Encoder-specific architecture (advanced mode)
+            decoder_hidden_dim, decoder_num_layers: Decoder-specific architecture (advanced mode)
+            latent_dynamics_hidden_dim, latent_dynamics_num_layers: Dynamics-specific architecture (advanced mode)
             num_epochs: Training epochs
             batch_size: Batch size for training
             learning_rate: Learning rate
@@ -898,6 +917,7 @@ class ExperimentConfig:
             latent_subdiv_min, latent_subdiv_max: CMGDB parameters for 2D latent space
             latent_padding: Padding for latent BoxMap
             latent_bounds_padding: Padding factor for latent bounding box
+            original_grid_subdiv: Subdivision for uniform grid in original space (results in 2^(N/3) points per dimension)
             large_sample_size: Size of large sample for domain-restricted computation
             target_points_per_box: Target density for large sample estimation
         """
@@ -917,7 +937,7 @@ class ExperimentConfig:
         self.skip_initial = skip_initial
         self.random_seed = random_seed
 
-        # Architecture
+        # Architecture - Simple mode (shared)
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
@@ -926,6 +946,14 @@ class ExperimentConfig:
         self.encoder_activation = encoder_activation
         self.decoder_activation = decoder_activation
         self.latent_dynamics_activation = latent_dynamics_activation
+
+        # Architecture - Advanced mode (component-specific)
+        self.encoder_hidden_dim = encoder_hidden_dim
+        self.encoder_num_layers = encoder_num_layers
+        self.decoder_hidden_dim = decoder_hidden_dim
+        self.decoder_num_layers = decoder_num_layers
+        self.latent_dynamics_hidden_dim = latent_dynamics_hidden_dim
+        self.latent_dynamics_num_layers = latent_dynamics_num_layers
 
         # Training
         self.num_epochs = num_epochs
@@ -946,10 +974,14 @@ class ExperimentConfig:
         self.latent_subdiv_limit = latent_subdiv_limit
         self.latent_padding = latent_padding
         self.latent_bounds_padding = latent_bounds_padding
+        self.original_grid_subdiv = original_grid_subdiv
 
         # Large sample
         self.large_sample_size = large_sample_size
         self.target_points_per_box = target_points_per_box
+
+        # Visualization
+        self.n_grid_points = n_grid_points
 
         # Map function (to be set)
         self.map_func = None
@@ -960,7 +992,7 @@ class ExperimentConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
-        return {
+        config_dict = {
             'domain_bounds': self.domain_bounds,
             'subdiv_min': self.subdiv_min,
             'subdiv_max': self.subdiv_max,
@@ -993,9 +1025,27 @@ class ExperimentConfig:
             'latent_subdiv_limit': self.latent_subdiv_limit,
             'latent_padding': self.latent_padding,
             'latent_bounds_padding': self.latent_bounds_padding,
+            'original_grid_subdiv': self.original_grid_subdiv,
             'large_sample_size': self.large_sample_size,
             'target_points_per_box': self.target_points_per_box,
+            'n_grid_points': self.n_grid_points,
         }
+        
+        # Include component-specific architecture parameters if set
+        if self.encoder_hidden_dim is not None:
+            config_dict['encoder_hidden_dim'] = self.encoder_hidden_dim
+        if self.encoder_num_layers is not None:
+            config_dict['encoder_num_layers'] = self.encoder_num_layers
+        if self.decoder_hidden_dim is not None:
+            config_dict['decoder_hidden_dim'] = self.decoder_hidden_dim
+        if self.decoder_num_layers is not None:
+            config_dict['decoder_num_layers'] = self.decoder_num_layers
+        if self.latent_dynamics_hidden_dim is not None:
+            config_dict['latent_dynamics_hidden_dim'] = self.latent_dynamics_hidden_dim
+        if self.latent_dynamics_num_layers is not None:
+            config_dict['latent_dynamics_num_layers'] = self.latent_dynamics_num_layers
+        
+        return config_dict
 
 
 def setup_experiment_dirs(base_dir: str) -> Dict[str, str]:
@@ -1136,6 +1186,15 @@ def compute_parameter_hash(
         if isinstance(func, functools.partial):
             # Access the original function from the partial object
             func_source = f"{func.func.__module__}.{func.func.__name__}"
+
+            # CRITICAL: Include bound parameters in hash
+            # This ensures changes to dynamics parameters trigger recomputation
+            if func.keywords:
+                # Sort keywords for consistent hashing
+                sorted_kwargs = sorted(func.keywords.items())
+                func_source += f"_kwargs:{sorted_kwargs}"
+            if func.args:
+                func_source += f"_args:{func.args}"
         else:
             # Fallback for other cases (e.g., built-in functions)
             func_source = f"{func.__module__}.{func.__name__}"
@@ -1165,20 +1224,20 @@ def get_cache_path(cache_dir: str, param_hash: str) -> Dict[str, str]:
     Returns:
         Dictionary with paths:
             - 'dir': Cache subdirectory for this hash
-            - 'morse_graph': Path to morse_graph_data.mgdb
+            - 'morse_graph': Path to morse_graph_data (native CMGDB format)
             - 'barycenters': Path to barycenters.npz
             - 'metadata': Path to metadata.json
 
     Example:
         >>> paths = get_cache_path('/path/to/cache', 'a1b2c3d4e5f6g7h8')
         >>> print(paths['morse_graph'])
-        /path/to/cache/a1b2c3d4e5f6g7h8/morse_graph_data.mgdb
+        /path/to/cache/a1b2c3d4e5f6g7h8/morse_graph_data
     """
     cache_subdir = os.path.join(cache_dir, param_hash)
 
     return {
         'dir': cache_subdir,
-        'morse_graph': os.path.join(cache_subdir, 'morse_graph_data.mgdb'),
+        'morse_graph': os.path.join(cache_subdir, 'morse_graph_data'),
         'barycenters': os.path.join(cache_subdir, 'barycenters.npz'),
         'metadata': os.path.join(cache_subdir, 'metadata.json'),
     }
@@ -1197,13 +1256,15 @@ def save_morse_graph_cache(
     Save CMGDB Morse graph computation to cache.
 
     Saves three files to enable future loading:
-    1. morse_graph_data.mgdb: CMGDB native format with morse_graph + map_graph
+    1. morse_graph_data: CMGDB native format (MorseGraph only)
     2. barycenters.npz: NumPy archive of barycenter coordinates
     3. metadata.json: Parameters and computation info
 
+    Note: map_graph is not cached as it's not needed for visualization/analysis.
+
     Args:
         morse_graph: CMGDB MorseGraph object
-        map_graph: CMGDB MapGraph object
+        map_graph: CMGDB MapGraph object (not cached, kept for API compatibility)
         barycenters: Dict mapping Morse set index to list of barycenter arrays
         metadata: Dictionary of parameters and computation info
         cache_dir: Base cache directory
@@ -1251,13 +1312,9 @@ def save_morse_graph_cache(
     with open(paths['metadata'], 'w') as f:
         json.dump(metadata_with_timestamp, f, indent=2)
 
-    # Save CMGDB data
-    CMGDB.SaveMorseGraphData(
-        morse_graph,
-        map_graph,
-        paths['morse_graph'],
-        metadata=metadata_with_timestamp
-    )
+    # Save CMGDB MorseGraph using native format (compatible with CMGDB.MorseGraph() constructor)
+    # Note: We don't cache map_graph since it's not needed for visualization/analysis
+    morse_graph.save(paths['morse_graph'])
 
     if verbose:
         print(f"  Cached Morse graph to: {paths['dir']}")
@@ -1344,5 +1401,253 @@ def load_morse_graph_cache(
 
     except Exception as e:
         if verbose:
-            print(f"  WARNING: Failed to load cache: {e}")
+            error_type = type(e).__name__
+            error_msg = str(e)
+
+            # Provide helpful error messages based on error type
+            if "input stream" in error_msg.lower() or "stream error" in error_msg.lower():
+                print(f"  WARNING: Cache file corrupted or incompatible format")
+                print(f"           Error: {error_type}: {error_msg}")
+                print(f"           Cache location: {paths['dir']}")
+                print(f"           Suggestion: Delete cache directory to force recomputation")
+            elif isinstance(e, FileNotFoundError):
+                print(f"  WARNING: Cache files incomplete (missing {e.filename})")
+            else:
+                print(f"  WARNING: Failed to load cache: {error_type}: {error_msg}")
+                print(f"           Cache location: {paths['dir']}")
+
         return None
+
+
+def load_or_compute_3d_morse_graph(
+    map_func: Callable,
+    domain_bounds: List,
+    subdiv_min: int,
+    subdiv_max: int,
+    subdiv_init: int,
+    subdiv_limit: int,
+    padding: bool,
+    base_dir: str,
+    force_recompute: bool = False,
+    verbose: bool = True,
+    equilibria: Optional[Dict[str, np.ndarray]] = None,
+    periodic_orbits: Optional[Dict[str, np.ndarray]] = None,
+    labels: Optional[Dict[str, str]] = None
+) -> Tuple[Dict[str, Any], bool]:
+    """
+    Load 3D Morse graph from cmgdb_3d/ cache or compute if not found.
+
+    This function implements a reusable caching strategy for expensive 3D CMGDB
+    computations. It checks for an existing cmgdb_3d/ directory and tries to load
+    cached results. If cache is not found or loading fails, it computes the Morse
+    graph and saves it to cmgdb_3d/ for future use.
+
+    When computing, also generates and saves standard visualizations:
+    - Morse graph diagram
+    - 3D scatter plot of barycenters (marker size proportional to box volume)
+    - 2D projection plots for dims [0,1], [0,2], [1,2]
+
+    Args:
+        map_func: Map function for dynamics
+        domain_bounds: Domain bounds for computation
+        subdiv_min: Minimum subdivision depth
+        subdiv_max: Maximum subdivision depth
+        subdiv_init: Initial subdivision depth
+        subdiv_limit: Maximum number of boxes
+        padding: Whether to use padding
+        base_dir: Base experiment directory (e.g., 'ives_model_output/')
+        force_recompute: If True, ignore cache and recompute
+        verbose: Whether to print progress messages
+        equilibria: Optional dict of equilibrium points for plotting
+        periodic_orbits: Optional dict of periodic orbits for plotting (each is Nx3 array)
+        labels: Optional dict with 'x', 'y', 'z' keys for axis labels
+
+    Returns:
+        Tuple of (result_dict, was_cached) where:
+            - result_dict: Same format as compute_morse_graph_3d() output
+            - was_cached: True if loaded from cache, False if computed
+
+    Example:
+        >>> result_3d, was_cached = load_or_compute_3d_morse_graph(
+        ...     ives_map, domain_bounds, 15, 18, 0, 50000, True,
+        ...     base_dir='examples/ives_model_output',
+        ...     equilibria={'Eq': equilibrium_point},
+        ...     periodic_orbits={'Period-12': period_12_orbit},
+        ...     labels={'x': 'log(M)', 'y': 'log(A)', 'z': 'log(D)'}
+        ... )
+        >>> if was_cached:
+        ...     print("Loaded from cache!")
+        >>> else:
+        ...     print("Computed and saved to cmgdb_3d/")
+    """
+    from MorseGraph.core import compute_morse_graph_3d
+    from MorseGraph.plot import plot_morse_graph_diagram, plot_morse_sets_3d_scatter
+    import json
+    from datetime import datetime
+
+    cmgdb_3d_dir = os.path.join(base_dir, 'cmgdb_3d')
+    cache_metadata_path = os.path.join(cmgdb_3d_dir, 'metadata.json')
+    results_dir = os.path.join(cmgdb_3d_dir, 'results')
+
+    # Try to load from cache if it exists and not forcing recompute
+    if not force_recompute and os.path.exists(cmgdb_3d_dir):
+        if verbose:
+            print(f"\nFound existing cmgdb_3d/ directory, attempting to load...")
+
+        # Compute hash of current parameters
+        param_hash = compute_parameter_hash(
+            map_func,
+            domain_bounds,
+            subdiv_min,
+            subdiv_max,
+            subdiv_init,
+            subdiv_limit,
+            padding
+        )
+
+        # Try to load cached data
+        cached = load_morse_graph_cache(cmgdb_3d_dir, param_hash, verbose=verbose)
+
+        if cached is not None:
+            # Successfully loaded from cache
+            result_3d = {
+                'morse_graph': cached['morse_graph'],
+                'barycenters': cached['barycenters'],
+                'num_morse_sets': cached['num_morse_sets'],
+                'computation_time': cached['metadata'].get('computation_time', 0.0),
+                'cached': True,
+                'cache_path': cmgdb_3d_dir
+            }
+            if verbose:
+                print(f"  ✓ Successfully loaded 3D Morse graph from cache")
+                print(f"    Morse sets: {result_3d['num_morse_sets']}")
+                print(f"    Visualizations available in: {results_dir}/")
+            return result_3d, True
+
+        else:
+            if verbose:
+                print(f"  ✗ Cache load failed or parameters don't match, will recompute")
+
+    # Compute from scratch
+    if verbose:
+        print(f"\nComputing 3D Morse graph (will cache to cmgdb_3d/)...")
+
+    result_3d = compute_morse_graph_3d(
+        map_func,
+        domain_bounds,
+        subdiv_min=subdiv_min,
+        subdiv_max=subdiv_max,
+        subdiv_init=subdiv_init,
+        subdiv_limit=subdiv_limit,
+        padding=padding,
+        cache_dir=cmgdb_3d_dir,
+        use_cache=False,  # Don't use standard caching, we're handling it here
+        verbose=verbose
+    )
+
+    # Create results directory
+    os.makedirs(results_dir, exist_ok=True)
+
+    # Generate and save visualizations
+    if verbose:
+        print(f"\n  Generating 3D visualizations...")
+
+    morse_graph_3d = result_3d['morse_graph']
+    barycenters_3d = result_3d['barycenters']
+
+    # 1. Morse graph diagram
+    plot_morse_graph_diagram(
+        morse_graph_3d,
+        output_path=f"{results_dir}/morse_graph_3d.png",
+        title="3D Morse Graph Diagram"
+    )
+    if verbose:
+        print(f"    ✓ Saved morse_graph_3d.png")
+
+    # 2. 3D scatter plot with barycenters (marker size proportional to box volume)
+    plot_morse_sets_3d_scatter(
+        morse_graph_3d,
+        domain_bounds,
+        output_path=f"{results_dir}/morse_sets_3d.png",
+        title="3D Morse Sets (Barycenters)",
+        equilibria=equilibria,
+        periodic_orbits=periodic_orbits,
+        labels=labels
+    )
+    if verbose:
+        print(f"    ✓ Saved morse_sets_3d.png")
+
+    # 3. 2D projection plots using CMGDB.PlotMorseSets
+    try:
+        import CMGDB
+        import matplotlib.pyplot as plt
+
+        if labels is None:
+            labels = {'x': 'X', 'y': 'Y', 'z': 'Z'}
+
+        projections = [
+            ([0, 1], f"{labels['x']}-{labels['y']}"),
+            ([0, 2], f"{labels['x']}-{labels['z']}"),
+            ([1, 2], f"{labels['y']}-{labels['z']}")
+        ]
+
+        for proj_dims, proj_name in projections:
+            proj_filename = f"morse_sets_proj_{''.join(map(str, proj_dims))}.png"
+            output_file = f"{results_dir}/{proj_filename}"
+
+            # Get axis labels for this projection
+            xlabel_key = ['x', 'y', 'z'][proj_dims[0]]
+            ylabel_key = ['x', 'y', 'z'][proj_dims[1]]
+
+            # Use CMGDB's PlotMorseSets with projection
+            # Note: PlotMorseSets creates its own figure and doesn't accept ax parameter
+            CMGDB.PlotMorseSets(
+                morse_graph_3d,
+                proj_dims=proj_dims,
+                fig_w=8,
+                fig_h=8,
+                xlabel=labels[xlabel_key],
+                ylabel=labels[ylabel_key],
+                fig_fname=output_file,
+                dpi=150
+            )
+
+            # If we need to add equilibria, we'll need to do it in a second pass
+            # For now, keep it simple and just use CMGDB's output
+
+            if verbose:
+                print(f"    ✓ Saved {proj_filename}")
+
+    except ImportError:
+        if verbose:
+            print(f"    ⚠ CMGDB not available for projection plots")
+    except Exception as e:
+        if verbose:
+            print(f"    ⚠ Could not generate projection plots: {e}")
+
+    # Save metadata about this computation
+    os.makedirs(cmgdb_3d_dir, exist_ok=True)
+    metadata = {
+        'computed_at': datetime.now().isoformat(),
+        'num_morse_sets': result_3d['num_morse_sets'],
+        'computation_time': result_3d['computation_time'],
+        'parameters': {
+            'subdiv_min': subdiv_min,
+            'subdiv_max': subdiv_max,
+            'subdiv_init': subdiv_init,
+            'subdiv_limit': subdiv_limit,
+            'padding': padding,
+            'domain_bounds': domain_bounds,
+        }
+    }
+
+    with open(cache_metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+
+    if verbose:
+        print(f"\n  ✓ Saved 3D Morse graph and visualizations to: {cmgdb_3d_dir}")
+
+    result_3d['cached'] = False
+    result_3d['cache_path'] = cmgdb_3d_dir
+
+    return result_3d, False

@@ -188,10 +188,11 @@ ConstructMorseDecomposition (MorseDecomposition * root,
   pq . push ( root );
   while ( not pq . empty () ) {
     ++ nodes_processed;
-    if ( nodes_processed % 1000 == 0 ) { 
-      std::cout << nodes_processed 
-        << " nodes have been encountered on Morse Decomposition Hierarchy.\n";
-    }
+    // Commented out verbose node processing output
+    // if ( nodes_processed % 1000 == 0 ) {
+    //   std::cout << nodes_processed
+    //     << " nodes have been encountered on Morse Decomposition Hierarchy.\n";
+    // }
     MorseDecomposition * work_node = pq . top ();
     pq . pop ();
     //std::cout << "Depth " << work_node -> depth () << ", node " << work_node 
@@ -368,8 +369,8 @@ Compute_Morse_Graph (MorseGraph * MG,
                      const unsigned int Max, 
                      const unsigned int Limit) {
   // Produce Morse Set Decomposition Hierarchy
-  std::cout << "Compute_Morse_Graph. Initializing root MorseDecomposition\n";
-  std::cout << "Compute_Morse_Graph. A phase_space -> size () == " << phase_space -> size () << "\n";
+  // std::cout << "Compute_Morse_Graph. Initializing root MorseDecomposition\n";
+  // std::cout << "Compute_Morse_Graph. A phase_space -> size () == " << phase_space -> size () << "\n";
 
   std::shared_ptr<Grid> root_space ( (Grid *) (phase_space -> clone ()) );
   
@@ -388,20 +389,20 @@ Compute_Morse_Graph (MorseGraph * MG,
   // Stitch together Morse Graph from Decomposition Hierarchy
   ConstructMorseGraph ( phase_space, MG, root, Min );
 
-  std::cout << "Compute_Morse_Graph. B phase_space -> size () == " << phase_space -> size () << "\n";
+  // std::cout << "Compute_Morse_Graph. B phase_space -> size () == " << phase_space -> size () << "\n";
 
   // Free memory used in decomposition hierarchy
   delete root;
 #ifdef MEMORYBOOKKEEPING
-
-  std::cout << "Total Grid Memory (can be external) = " << max_grid_external_memory << "\n";
-  std::cout << "Max Memory For Single Grid (must be internal)= " << max_grid_internal_memory << "\n";
-  std::cout << "Max SCC Random Access memory use (must be internal)= " << max_scc_memory_internal << "\n";
-  std::cout << "Max SCC stack memory use (can be external memory) = " << max_scc_memory_external << "\n";
-  std::cout << " ---- SUMMARY ---- \n";
-  std::cout << "Internal Memory Requirement = " << max_grid_internal_memory + max_scc_memory_internal << "\n";
-  std::cout << "External Memory Requirement = " << max_grid_external_memory + max_scc_memory_external << "\n";
-  std::cout << "Max graph memory size (never stored, however) = " << max_graph_memory << "\n";
+  // Commented out verbose memory bookkeeping output
+  // std::cout << "Total Grid Memory (can be external) = " << max_grid_external_memory << "\n";
+  // std::cout << "Max Memory For Single Grid (must be internal)= " << max_grid_internal_memory << "\n";
+  // std::cout << "Max SCC Random Access memory use (must be internal)= " << max_scc_memory_internal << "\n";
+  // std::cout << "Max SCC stack memory use (can be external memory) = " << max_scc_memory_external << "\n";
+  // std::cout << " ---- SUMMARY ---- \n";
+  // std::cout << "Internal Memory Requirement = " << max_grid_internal_memory + max_scc_memory_internal << "\n";
+  // std::cout << "External Memory Requirement = " << max_grid_external_memory + max_scc_memory_external << "\n";
+  // std::cout << "Max graph memory size (never stored, however) = " << max_graph_memory << "\n";
 #endif
   //std::cout << "Returning from COMPUTE MORSE GRAPH\n";
 }

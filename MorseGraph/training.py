@@ -378,24 +378,32 @@ def train_autoencoder_dynamics(
         device = torch.device("cpu")
 
     # Model setup
+    # Use component-specific architecture if provided, else fall back to shared parameters
+    encoder_hidden = config.encoder_hidden_dim if config.encoder_hidden_dim is not None else config.hidden_dim
+    encoder_layers = config.encoder_num_layers if config.encoder_num_layers is not None else config.num_layers
+    decoder_hidden = config.decoder_hidden_dim if config.decoder_hidden_dim is not None else config.hidden_dim
+    decoder_layers = config.decoder_num_layers if config.decoder_num_layers is not None else config.num_layers
+    dynamics_hidden = config.latent_dynamics_hidden_dim if config.latent_dynamics_hidden_dim is not None else config.hidden_dim
+    dynamics_layers = config.latent_dynamics_num_layers if config.latent_dynamics_num_layers is not None else config.num_layers
+
     encoder = Encoder(
         config.input_dim,
         config.latent_dim,
-        config.hidden_dim,
-        config.num_layers,
+        encoder_hidden,
+        encoder_layers,
         output_activation=config.encoder_activation or config.output_activation
     ).to(device)
     decoder = Decoder(
         config.latent_dim,
         config.input_dim,
-        config.hidden_dim,
-        config.num_layers,
+        decoder_hidden,
+        decoder_layers,
         output_activation=config.decoder_activation or config.output_activation
     ).to(device)
     latent_dynamics = LatentDynamics(
         config.latent_dim,
-        config.hidden_dim,
-        config.num_layers,
+        dynamics_hidden,
+        dynamics_layers,
         output_activation=config.latent_dynamics_activation or config.output_activation
     ).to(device)
 

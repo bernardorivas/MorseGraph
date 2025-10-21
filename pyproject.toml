@@ -18,6 +18,7 @@ dependencies = [
     "networkx",
     "matplotlib",
     "joblib",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]

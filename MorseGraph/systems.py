@@ -237,7 +237,7 @@ def ives_model(x: np.ndarray,
                c: float = 10**-6.435,
                d: float = 0.5517,
                p: float = 0.06659,
-               q: float = 0.902) -> np.ndarray:
+               q: float = 0.9026) -> np.ndarray:
     """
     Ives et al. (2008) midge-algae-detritus ecological model.
 
@@ -316,33 +316,33 @@ def ives_model_log(log_x: np.ndarray,
                    c: float = 10**-6.435,
                    d: float = 0.5517,
                    p: float = 0.06659,
-                   q: float = 0.902,
-                   offset: float = 0.001) -> np.ndarray:
+                   q: float = 0.9026,
+                   offset: float = 1e-12) -> np.ndarray:
     """
-    Ives et al. (2008) midge-algae-detritus model in log₁₀ coordinates.
+    Ives et al. (2008) midge-algae-detritus model in log10 coordinates.
 
-    This wrapper transforms the Ives model to operate in log₁₀ space, which
+    This wrapper transforms the Ives model to operate in log10 space, which
     is convenient for analysis across many orders of magnitude and matches
     the coordinate system used in the original publication.
 
     The transformation is:
-        1. Convert from log₁₀ to linear: x = 10^(log_x)
+        1. Convert from log10 to linear: x = 10^(log_x)
         2. Apply dynamics: x_next = ives_model(x)
-        3. Convert back to log₁₀: log_x_next = log₁₀(x_next + offset)
+        3. Convert back to log10: log_x_next = log10(x_next + offset)
 
     Args:
-        log_x: State vector in log₁₀ coordinates [log₁₀(midge), log₁₀(algae), log₁₀(detritus)]
+        log_x: State vector in log10 coordinates [log10(midge), log10(algae), log10(detritus)]
         r1, r2, c, d, p, q: Ives model parameters (see ives_model for details)
         offset: Small constant added before log transform to avoid log(0) (default: 0.001)
 
     Returns:
-        Next state vector in log₁₀ coordinates
+        Next state vector in log10 coordinates
 
     Reference:
         Ives, A.R., et al., "High-amplitude fluctuations and alternative
         dynamical states of midges in Lake Myvatn"
         Nature 452: 84-87 (2008)
-        (Figure 1b uses log₁₀ scale with offset 0.001)
+        (Figure 1b uses log10 scale with offset 0.001)
 
     Example:
         >>> from MorseGraph.systems import ives_model_log
@@ -350,16 +350,16 @@ def ives_model_log(log_x: np.ndarray,
         >>> log_x_next = ives_model_log(log_x)
 
     Note:
-        Typical domain in log₁₀ space: [-7, 7]³ representing abundances
+        Typical domain in log10 space: [-7, 7]³ representing abundances
         from 10^-7 to 10^7.
     """
-    # Convert from log₁₀ to linear scale
+    # Convert from log10 to linear scale
     x = 10.0**np.array(log_x)
 
     # Apply dynamics in linear scale
     x_next = ives_model(x, r1=r1, r2=r2, c=c, d=d, p=p, q=q)
 
-    # Convert back to log₁₀ scale with offset
+    # Convert back to log10 scale with offset
     log_x_next = np.log10(x_next + offset)
 
     return log_x_next

@@ -6,6 +6,7 @@ There are 4 packages in this repo:
 4. MORALS (from /morals/) - depends on CMGDB (@ewertonvieira)
 
 # Installation Options
+
 From repo root
 pip install -e .                  # Installs morsegraph
 pip install -e ./cmgdb            # Installs CMGDB (requires cmake)
@@ -15,17 +16,20 @@ pip install -e ./morals           # Installs MORALS
 Once installed, you import them by their package names (not directory names):
 
 # MorseGraph package
+
 from MorseGraph import Model
 
 # CMGDB package (C++)
+
 import CMGDB
 
 # Hybrid dynamics package
+
 from hybrid_dynamics import HybridSystem
 
 # MORALS package
-import MORALS
 
+import MORALS
 
 ## About MorseGraph
 
@@ -36,6 +40,7 @@ MorseGraph is a lightweight Python library for computing and analyzing Morse gra
 MorseGraph provides tools to study the global structure of dynamical systems through discrete abstractions on grids. The library implements outer approximations of dynamics and uses graph-theoretic methods to identify attractors, basins of attraction, and connecting orbits.
 
 **Key Features:**
+
 - Support for discrete maps, ODEs, data-driven and latent dynamics
 - Outer approximation using epsilon-enlargement of boxes
 - Parallel computation of box-to-box transitions
@@ -144,30 +149,40 @@ morse_graph = compute_morse_graph(model)
 All examples are located in the `examples/` directory with well-organized configuration sections for easy customization.
 
 ### 1. Map Dynamics (`1_map_dynamics.py`)
+
 Analyzes the **Hénon map**, a classic chaotic 2D discrete dynamical system. Demonstrates:
+
 - `BoxMapFunction` for discrete maps
 - Epsilon-bloating for rigorous outer approximation
 - Morse graph computation and visualization
 
 ### 2. ODE Dynamics - Toggle Switch (`2_ode_dynamics.py`)
+
 Studies a **genetic toggle switch** - a bistable biological system with mutual inhibition. Demonstrates:
+
 - `BoxMapODE` for continuous-time systems
 - Analysis of multistable dynamics
 - Basin of attraction computation
 
 ### 3. ODE Dynamics - Van der Pol (`3_ode_dynamics.py`)
+
 Analyzes the **Van der Pol oscillator**, a nonlinear system with limit cycle behavior. Demonstrates:
+
 - ODE integration with configurable time horizon
 - Visualization of periodic attractors
 
 ### 4. Data-Driven Dynamics (`4_data_driven.py`)
+
 Computes Morse graphs from **trajectory data** (Van der Pol). Demonstrates:
+
 - `BoxMapData` with k-nearest neighbor interpolation
 - Data coverage visualization
 - Working with sampled trajectories instead of analytical models
 
 ### 5. Learned Latent Dynamics (`5_learned_dynamics.py`)
+
 Learns a **2D latent representation** of the 3D **Lorenz system** using autoencoders. Demonstrates:
+
 - `BoxMapLearnedLatent` for ML-based dynamics
 - Encoder-decoder framework for dimensionality reduction
 - Comparing Morse graphs in full vs. latent space
