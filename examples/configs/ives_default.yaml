@@ -49,25 +49,26 @@ domain:
 
 # 3D CMGDB parameters for original space
 cmgdb_3d:
-  subdiv_min: 33      # Minimum subdivision depth (2^N total boxes)
-  subdiv_max: 39      # Maximum subdivision depth (equal to min for uniform grid)
+  subdiv_min: 30 # 33      # Minimum subdivision depth (2^N total boxes)
+  subdiv_max: 36 # 39      # Maximum subdivision depth (equal to min for uniform grid)
   subdiv_init: 0      # Initial subdivision depth (0 to start at subdiv_min)
   subdiv_limit: 100000  # Maximum number of boxes to prevent runaway refinement
   padding: false      # Disable boundary padding
 
 # 2D CMGDB parameters for latent space
 cmgdb_2d:
-  subdiv_min: 16      # Minimum subdivision depth for latent space
-  subdiv_max: 20      # Maximum subdivision depth
+  subdiv_min: 20 # 16      # Minimum subdivision depth for latent space
+  subdiv_max: 20 # 20     # Maximum subdivision depth
   subdiv_init: 0      # Initial subdivision
   subdiv_limit: 100000  # Maximum number of boxes
   padding: true       # Padding for latent space
   bounds_padding: 1.01  # Factor for bounding box of latent bounds
-  original_grid_subdiv: 24  # Subdivision for uniform grid in original space (2^(N/3) points per dim)
+  original_grid_subdiv: 18  # Subdivision for uniform grid in original space (2^(N/3) points per dim)
+  neighbor_radius_factor: 1.0  # Multiplier for box width to determine "nearby data" (BoxMapData method)
 
 # Training data generation
 training:
-  n_trajectories: 1000  # Number of random trajectories to generate
+  n_trajectories: 10000  # Number of random trajectories to generate
   n_points: 20          # Points to sample from each trajectory
   skip_initial: 0       # Number of initial points to skip (transient)
   random_seed: 42       # Random seed for reproducibility
@@ -86,12 +87,12 @@ model:
 
   # Shared architecture across all components
   hidden_dim: 32        # Hidden layer dimension (shared)
-  num_layers: 1 # 3         # Number of hidden layers (shared)
+  num_layers: 3 # 1 # 3         # Number of hidden layers (shared)
 
   # Activation functions (component-specific)
-  encoder_activation: 'tanh' # null      # Encoder output activation ('tanh', 'sigmoid', 'relu', null)
-  decoder_activation: 'sigmoid' # null      # Decoder output activation ('tanh', 'sigmoid', 'relu', null)
-  latent_dynamics_activation: 'tanh' # null  # Latent dynamics output activation ('tanh', 'sigmoid', 'relu', null)
+  encoder_activation: null # 'tanh' # null      # Encoder output activation ('tanh', 'sigmoid', 'relu', null)
+  decoder_activation: null # 'sigmoid' # null      # Decoder output activation ('tanh', 'sigmoid', 'relu', null)
+  latent_dynamics_activation: null # 'tanh' # null  # Latent dynamics output activation ('tanh', 'sigmoid', 'relu', null)
 
   # Optional: Uncomment and use these to specify component-specific architectures
   # encoder_hidden_dim: 64
@@ -103,7 +104,7 @@ model:
 
 # Loss function weights
 loss_weights:
-  w_recon: 100.0          # Reconstruction loss weight
+  w_recon: 500.0          # Reconstruction loss weight
   w_dyn_recon: 1.0      # Dynamics reconstruction loss weight
   w_dyn_cons: 1.0       # Dynamics consistency loss weight
 

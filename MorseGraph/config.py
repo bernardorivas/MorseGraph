@@ -194,7 +194,8 @@ def load_experiment_config(config_path: str, system_type: str = 'map',
             'subdiv_limit': 'latent_subdiv_limit',
             'padding': 'latent_padding',
             'bounds_padding': 'latent_bounds_padding',
-            'original_grid_subdiv': 'original_grid_subdiv'
+            'original_grid_subdiv': 'original_grid_subdiv',
+            'neighbor_radius_factor': 'neighbor_radius_factor'
         }
         for yaml_key, param_key in mapping.items():
             if yaml_key in cmgdb_2d:

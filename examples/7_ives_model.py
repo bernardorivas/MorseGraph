@@ -41,7 +41,13 @@ from MorseGraph.utils import (
     save_experiment_metadata,
     compute_latent_bounds,
     get_next_run_number,
-    load_or_compute_3d_morse_graph
+    load_or_compute_3d_morse_graph,
+    compute_trajectory_hash,
+    compute_training_hash,
+    compute_cmgdb_2d_hash,
+    load_or_train_autoencoder,
+    load_or_compute_2d_morse_graphs,
+    load_or_generate_trajectory_data
 )
 from MorseGraph.config import load_experiment_config, save_config_to_yaml
 from MorseGraph.core import (
@@ -61,7 +67,7 @@ from MorseGraph.plot import (
     compute_encoded_barycenters
 )
 # Note: 3D visualizations (plot_morse_sets_3d_scatter, 3D projections) are now
-# generated in load_or_compute_3d_morse_graph() and cached in cmgdb_3d/results/
+# generated in load_or_compute_3d_morse_graph() and cached in cmgdb_3d/{hash}/results/
 from MorseGraph.systems import ives_model_log
 
 
@@ -96,7 +102,11 @@ def main():
         python 7_ives_model.py                                     # Run with default config
         python 7_ives_model.py --config configs/ives_fast.yaml     # Quick test run
         python 7_ives_model.py --config configs/ives_high_res.yaml # High-resolution
-        python 7_ives_model.py --force-recompute                   # Force 3D recompute
+        python 7_ives_model.py --force-recompute-3d                # Force 3D recompute
+        python 7_ives_model.py --force-regenerate-data             # Force trajectory regeneration
+        python 7_ives_model.py --force-retrain                     # Force autoencoder retrain
+        python 7_ives_model.py --force-recompute-2d                # Force 2D recompute
+        python 7_ives_model.py --force-all                         # Force all computations
         python 7_ives_model.py --help                              # Show this help
                 """
     )
@@ -107,57 +117,115 @@ def main():
         help='Path to YAML configuration file (default: examples/configs/ives_default.yaml)'
     )
     parser.add_argument(
-        '--force-recompute', '--force-recompute-3d',
+        '--force-recompute-3d',
         action='store_true',
-        dest='force_recompute',
         help='Force recomputation of 3D Morse graph (ignore cache)'
     )
+    parser.add_argument(
+        '--force-retrain',
+        action='store_true',
+        help='Force retraining of autoencoder models (ignore cached training)'
+    )
+    parser.add_argument(
+        '--force-recompute-2d',
+        action='store_true',
+        help='Force recomputation of 2D Morse graphs (ignore cache)'
+    )
+    parser.add_argument(
+        '--force-regenerate-data',
+        action='store_true',
+        help='Force regeneration of trajectory data (ignore cache)'
+    )
+    parser.add_argument(
+        '--force-all',
+        action='store_true',
+        help='Force all computations (equivalent to --force-recompute-3d --force-regenerate-data --force-retrain --force-recompute-2d)'
+    )
+    # Legacy support
+    parser.add_argument(
+        '--force-recompute',
+        action='store_true',
+        dest='force_recompute_legacy',
+        help=argparse.SUPPRESS  # Hidden - legacy support for --force-recompute
+    )
     args = parser.parse_args()
+
+    # Handle --force-all and legacy --force-recompute
+    if args.force_all:
+        args.force_recompute_3d = True
+        args.force_regenerate_data = True
+        args.force_retrain = True
+        args.force_recompute_2d = True
+
+    # Legacy support: --force-recompute maps to --force-recompute-3d
+    if hasattr(args, 'force_recompute_legacy') and args.force_recompute_legacy:
+        args.force_recompute_3d = True
 
     # Load configuration from YAML first
     print("\n" + "="*80)
     config = load_experiment_config(args.config, verbose=True)
     print("="*80)
 
-    # Extract dynamics parameters from config
-    if hasattr(config, '_yaml_config') and 'dynamics' in config._yaml_config:
-        dyn_params = config._yaml_config['dynamics']
-        R1 = dyn_params.get('r1', 3.873)
-        R2 = dyn_params.get('r2', 11.746)
-        C = dyn_params.get('c', 3.67e-07)
-        D = dyn_params.get('d', 0.5517)
-        P = dyn_params.get('p', 0.06659)
-        Q = dyn_params.get('q', 0.9026)
-        LOG_OFFSET = dyn_params.get('log_offset', 0.001)
+    # Extract dynamics parameters from config - fail fast if missing
+    if not hasattr(config, '_yaml_config') or 'dynamics' not in config._yaml_config:
+        raise ValueError(
+            "Config must have 'dynamics' section. Please check your YAML configuration file.\n"
+            "Required fields: r1, r2, c, d, p, q, log_offset"
+        )
 
-        # Get equilibrium and period-12 orbit if available
-        if 'domain' in config._yaml_config and 'equilibrium' in config._yaml_config['domain']:
-            EQUILIBRIUM_POINT = np.array(config._yaml_config['domain']['equilibrium'])
-        else:
-            EQUILIBRIUM_POINT = np.array([0.792107, 0.209010, 0.376449])
-        
-        # Read period-12 orbit from config
-        if 'domain' in config._yaml_config and 'period_12_orbit' in config._yaml_config['domain']:
-            PERIOD_12_ORBIT = np.array(config._yaml_config['domain']['period_12_orbit'])
-        else:
-            PERIOD_12_ORBIT = None
+    dyn_params = config._yaml_config['dynamics']
+
+    # Extract required dynamics parameters (no defaults - must be explicit)
+    required_params = ['r1', 'r2', 'c', 'd', 'p', 'q', 'log_offset']
+    missing = [p for p in required_params if p not in dyn_params]
+    if missing:
+        raise ValueError(
+            f"Missing required dynamics parameters in config: {missing}\n"
+            f"Please add these to the 'dynamics' section of your YAML config."
+        )
+
+    R1 = dyn_params['r1']
+    R2 = dyn_params['r2']
+    C = dyn_params['c']
+    D = dyn_params['d']
+    P = dyn_params['p']
+    Q = dyn_params['q']
+    LOG_OFFSET = dyn_params['log_offset']
+
+    # Optional: equilibrium point (for visualization)
+    if 'domain' in config._yaml_config and 'equilibrium' in config._yaml_config['domain']:
+        EQUILIBRIUM_POINT = np.array(config._yaml_config['domain']['equilibrium'])
     else:
-        # Fallback to defaults
-        R1, R2, C, D, P, Q, LOG_OFFSET = 3.873, 11.746, 3.67e-07, 0.5517, 0.06659, 0.9026, 0.001
-        EQUILIBRIUM_POINT = np.array([0.792107, 0.209010, 0.376449])
+        EQUILIBRIUM_POINT = None
+        print("  Note: No equilibrium point provided in config (optional)")
+
+    # Optional: period-12 orbit (for visualization)
+    if 'domain' in config._yaml_config and 'period_12_orbit' in config._yaml_config['domain']:
+        PERIOD_12_ORBIT = np.array(config._yaml_config['domain']['period_12_orbit'])
+    else:
         PERIOD_12_ORBIT = None
+        print("  Note: No period-12 orbit provided in config (optional)")
 
     # Print header with loaded parameters
     print("\nIVES ECOLOGICAL MODEL - MORSE GRAPH ANALYSIS")
     print("Model: Midge-Algae-Detritus dynamics (Ives et al. 2008)")
     print(f"Parameters: R1={R1:.3f}, R2={R2:.3f}, C={C:.2e}, D={D:.4f}, P={P:.5f}, Q={Q:.3f}")
     print(f"Domain (log): {config.domain_bounds[0]} to {config.domain_bounds[1]}")
-    print(f"Equilibrium (log): [{EQUILIBRIUM_POINT[0]:.4f}, {EQUILIBRIUM_POINT[1]:.4f}, {EQUILIBRIUM_POINT[2]:.4f}]")
+
+    if EQUILIBRIUM_POINT is not None:
+        print(f"Equilibrium (log): [{EQUILIBRIUM_POINT[0]:.4f}, {EQUILIBRIUM_POINT[1]:.4f}, {EQUILIBRIUM_POINT[2]:.4f}]")
     if PERIOD_12_ORBIT is not None:
         print(f"Period-12 orbit: {len(PERIOD_12_ORBIT)} points loaded from config")
 
-    if args.force_recompute:
-        print("\nForce recompute enabled - will ignore 3D CMGDB cache")
+    # Print force flags status
+    if args.force_recompute_3d:
+        print("\nForce recompute 3D enabled - will ignore 3D CMGDB cache")
+    if args.force_regenerate_data:
+        print("Force regenerate data enabled - will ignore trajectory data cache")
+    if args.force_retrain:
+        print("Force retrain enabled - will ignore training cache")
+    if args.force_recompute_2d:
+        print("Force recompute 2D enabled - will ignore 2D CMGDB cache")
 
     # Create map function with loaded parameters
     ives_map = partial(
@@ -188,7 +256,7 @@ def main():
     print("STEP 1: Loading/Computing 3D Morse Graph (Log Scale)")
     print("="*80)
 
-    result_3d, was_cached = load_or_compute_3d_morse_graph(
+    result_3d, was_cached_3d = load_or_compute_3d_morse_graph(
         config.map_func,
         config.domain_bounds,
         subdiv_min=config.subdiv_min,
@@ -197,43 +265,61 @@ def main():
         subdiv_limit=config.subdiv_limit,
         padding=config.padding,
         base_dir=base_output_dir,
-        force_recompute=args.force_recompute,
+        force_recompute=args.force_recompute_3d,
         verbose=True,
-        equilibria={'Equilibrium': EQUILIBRIUM_POINT},
+        equilibria={'Equilibrium': EQUILIBRIUM_POINT} if EQUILIBRIUM_POINT is not None else None,
         periodic_orbits={'Period-12': PERIOD_12_ORBIT} if PERIOD_12_ORBIT is not None else None,
         labels={'x': 'log(Midge)', 'y': 'log(Algae)', 'z': 'log(Detritus)'}
     )
 
+    # Store hash for dependent computations
+    cmgdb_3d_hash = result_3d['param_hash']
+
     morse_graph_3d = result_3d['morse_graph']
     barycenters_3d = result_3d['barycenters']
 
-    if was_cached:
-        print("\n  ✓ Using cached 3D Morse graph from cmgdb_3d/")
+    if was_cached_3d:
+        print(f"\n✓ Using cached 3D Morse graph (hash: {cmgdb_3d_hash})")
     else:
-        print("\n  ✓ Computed and saved 3D Morse graph to cmgdb_3d/")
+        print(f"\n✓ Computed and saved 3D Morse graph (hash: {cmgdb_3d_hash})")
 
-    # Note: 3D visualizations are already saved in cmgdb_3d/results/:
+    # Note: 3D visualizations are already saved in cmgdb_3d/{hash}/results/:
     #   - morse_graph_3d.png (Morse graph diagram)
     #   - morse_sets_3d.png (3D scatter with barycenters)
     #   - morse_sets_proj_01.png, morse_sets_proj_02.png, morse_sets_proj_12.png (2D projections)
-    print(f"  3D visualizations available in: {base_output_dir}/cmgdb_3d/results/")
+    results_3d_dir = os.path.join(result_3d['cache_path'], 'results')
+    print(f"  3D visualizations available in: {results_3d_dir}/")
 
     # ========================================================================
-    # Step 2: Generate Training Data
+    # Step 2: Load or Generate Training Data
     # ========================================================================
 
     print("\n" + "="*80)
-    print("STEP 2: Generating Training Data")
+    print("STEP 2: Loading/Generating Training Data")
     print("="*80)
 
-    X, Y, trajectories = generate_map_trajectory_data(
-        config.map_func,
-        config.n_trajectories,
-        config.n_points,
-        np.array(config.domain_bounds),
-        random_seed=config.random_seed,
-        skip_initial=config.skip_initial
+    # Compute trajectory hash based on config and 3D hash
+    trajectory_hash = compute_trajectory_hash(config, cmgdb_3d_hash)
+    print(f"Trajectory hash: {trajectory_hash}")
+
+    # Load or generate trajectory data
+    trajectory_result, was_cached_traj = load_or_generate_trajectory_data(
+        config=config,
+        trajectory_hash=trajectory_hash,
+        map_func=config.map_func,
+        domain_bounds=np.array(config.domain_bounds),
+        output_dir=base_output_dir,
+        force_regenerate=args.force_regenerate_data
     )
+
+    X = trajectory_result['X']
+    Y = trajectory_result['Y']
+    trajectories = trajectory_result['trajectories']
+
+    if was_cached_traj:
+        print(f"\n✓ Using cached trajectory data (hash: {trajectory_hash})")
+    else:
+        print(f"\n✓ Generated and cached trajectory data (hash: {trajectory_hash})")
 
     # Train/val split
     split = int(0.8 * len(X))
@@ -244,35 +330,57 @@ def main():
     print(f"Val:   {len(x_val)} samples")
 
     # ========================================================================
-    # Step 3: Train Autoencoder + Latent Dynamics
+    # Step 3: Load or Train Autoencoder + Latent Dynamics
     # ========================================================================
 
     print("\n" + "="*80)
-    print("STEP 3: Training Autoencoder + Latent Dynamics")
+    print("STEP 3: Loading/Training Autoencoder + Latent Dynamics")
     print("="*80)
 
-    training_result = train_autoencoder_dynamics(
-        x_train, y_train,
-        x_val, y_val,
-        config,
-        verbose=True,
-        progress_interval=100
+    # Compute training hash based on config and 3D hash
+    training_hash = compute_training_hash(config, cmgdb_3d_hash)
+    print(f"Training hash: {training_hash}")
+
+    # Prepare training data
+    training_data = {
+        'X_train': x_train,
+        'Xnext_train': y_train,
+        'X_val': x_val,
+        'Xnext_val': y_val
+    }
+
+    # Load or train models
+    training_result, was_cached_training = load_or_train_autoencoder(
+        config=config,
+        training_hash=training_hash,
+        training_data=training_data,
+        map_func=config.map_func,
+        output_dir=base_output_dir,
+        force_retrain=args.force_retrain
     )
 
     encoder = training_result['encoder']
     decoder = training_result['decoder']
     latent_dynamics = training_result['latent_dynamics']
-    device = training_result['device']
 
-    # Save models
+    # Get device from encoder
+    device = next(encoder.parameters()).device
+
+    if was_cached_training:
+        print(f"\n✓ Using cached training (hash: {training_hash})")
+    else:
+        print(f"\n✓ Training completed and cached (hash: {training_hash})")
+
+    # Copy models to run directory for reference
     torch.save(encoder.state_dict(), f"{dirs['models']}/encoder.pt")
     torch.save(decoder.state_dict(), f"{dirs['models']}/decoder.pt")
     torch.save(latent_dynamics.state_dict(), f"{dirs['models']}/latent_dynamics.pt")
 
     # Plot training curves
+    losses = training_result['training_losses']
     plot_training_curves(
-        training_result['train_losses'],
-        training_result['val_losses'],
+        losses['train'],
+        losses['val'],
         output_path=f"{dirs['results']}/training_curves.png"
     )
 
@@ -289,7 +397,12 @@ def main():
         z_val = encoder(torch.FloatTensor(x_val).to(device)).cpu().numpy()
         z_all = encoder(torch.FloatTensor(X).to(device)).cpu().numpy()
 
-    latent_bounds = compute_latent_bounds(z_train, padding_factor=config.latent_bounds_padding)
+    # Get latent bounds from training result (or compute if not cached)
+    if 'latent_bounds' in training_result:
+        latent_bounds = training_result['latent_bounds']
+    else:
+        latent_bounds = compute_latent_bounds(z_train, padding_factor=config.latent_bounds_padding)
+
     print(f"Latent bounds: {latent_bounds.tolist()}")
 
     # Encode 3D barycenters to latent space for visualization
@@ -374,20 +487,51 @@ def main():
     print("  ✓ Saved trajectory analysis visualization")
 
     # ========================================================================
-    # Step 5: Compute Learned Latent Dynamics (2D Morse Graphs)
+    # Step 5: Load or Compute Learned Latent Dynamics (2D Morse Graphs)
     # ========================================================================
 
     print("\n" + "="*80)
-    print("STEP 5: Computing Learned Latent Dynamics (2D Morse Graphs)")
+    print("STEP 5: Loading/Computing Learned Latent Dynamics (2D Morse Graphs)")
     print("="*80)
 
-    # Generate dense uniform grid in original 3D space (MORALS approach)
-    print("\nGenerating dense uniform grid in original space...")
+    # Compute 2D hash based on config and training hash
+    cmgdb_2d_hash = compute_cmgdb_2d_hash(config, training_hash)
+    print(f"2D CMGDB hash: {cmgdb_2d_hash}")
 
-    # Use subdivision to create uniform grid (adjustable for memory/resolution trade-off)
+    # Load or compute 2D Morse graphs
+    morse_2d_result, was_cached_2d = load_or_compute_2d_morse_graphs(
+        config=config,
+        cmgdb_2d_hash=cmgdb_2d_hash,
+        encoder=encoder,
+        decoder=decoder,
+        latent_dynamics=latent_dynamics,
+        latent_bounds=latent_bounds,
+        map_func=config.map_func,
+        output_dir=base_output_dir,
+        force_recompute=args.force_recompute_2d
+    )
+
+    morse_graph_2d_padded = morse_2d_result['morse_graph_padded']
+    barycenters_2d_padded = morse_2d_result['barycenters_padded']
+    morse_graph_2d_unpadded = morse_2d_result['morse_graph_unpadded']
+    barycenters_2d_unpadded = morse_2d_result['barycenters_unpadded']
+
+    if was_cached_2d:
+        print(f"\n✓ Using cached 2D Morse graphs (hash: {cmgdb_2d_hash})")
+    else:
+        print(f"\n✓ Computed and cached 2D Morse graphs (hash: {cmgdb_2d_hash})")
+
+    # ========================================================================
+    # Step 5a: Generate Large Grid for Comparisons and Preimage Analysis
+    # ========================================================================
+
+    print("\n" + "="*80)
+    print("STEP 5a: Generating Large Grid for Analysis")
+    print("="*80)
+
+    # Generate dense uniform grid in original space for encoding
     original_grid_subdiv = config.original_grid_subdiv
     n_per_dim = 2 ** (original_grid_subdiv // 3)
-
     print(f"  Grid: {n_per_dim} points per dimension ({n_per_dim**3} total)")
 
     # Create meshgrid for 3D space
@@ -395,50 +539,12 @@ def main():
                for i in range(3)]
     mesh = np.meshgrid(*grid_1d, indexing='ij')
     X_large_grid = np.stack([m.flatten() for m in mesh], axis=1)
-
     print(f"  Generated {len(X_large_grid)} grid points in original space")
 
     # Encode grid to latent space
     with torch.no_grad():
         z_large_grid = encoder(torch.FloatTensor(X_large_grid).to(device)).cpu().numpy()
-
     print(f"  Encoded to latent space: {z_large_grid.shape}")
-
-    # Method 1: Domain-restricted with padding (MORALS default)
-    print("\nMethod 1: Domain-restricted + Padding...")
-    result_2d_padded = compute_morse_graph_2d_restricted(
-        latent_dynamics,
-        device,
-        z_large_grid,
-        latent_bounds.tolist(),
-        subdiv_min=config.latent_subdiv_min,
-        subdiv_max=config.latent_subdiv_max,
-        subdiv_init=config.latent_subdiv_init,
-        subdiv_limit=config.latent_subdiv_limit,
-        include_neighbors=True,
-        padding=True,
-        verbose=True
-    )
-
-    morse_graph_2d_padded = result_2d_padded['morse_graph']
-
-    # Method 2: Domain-restricted without padding
-    print("\nMethod 2: Domain-restricted + No Padding...")
-    result_2d_unpadded = compute_morse_graph_2d_restricted(
-        latent_dynamics,
-        device,
-        z_large_grid,
-        latent_bounds.tolist(),
-        subdiv_min=config.latent_subdiv_min,
-        subdiv_max=config.latent_subdiv_max,
-        subdiv_init=config.latent_subdiv_init,
-        subdiv_limit=config.latent_subdiv_limit,
-        include_neighbors=True,
-        padding=False,
-        verbose=True
-    )
-
-    morse_graph_2d_unpadded = result_2d_unpadded['morse_graph']
 
     # ========================================================================
     # Step 6: Visualize Learned Latent Dynamics (2D)
@@ -457,8 +563,12 @@ def main():
 
     # Project equilibrium and period-12 orbit to latent space
     with torch.no_grad():
-        equilibrium_tensor = torch.FloatTensor(EQUILIBRIUM_POINT).unsqueeze(0).to(device)
-        equilibrium_latent = encoder(equilibrium_tensor).cpu().numpy()[0]
+        # Encode equilibrium if available
+        if EQUILIBRIUM_POINT is not None:
+            equilibrium_tensor = torch.FloatTensor(EQUILIBRIUM_POINT).unsqueeze(0).to(device)
+            equilibrium_latent = encoder(equilibrium_tensor).cpu().numpy()[0]
+        else:
+            equilibrium_latent = None
 
         # Encode period-12 orbit if available
         if PERIOD_12_ORBIT is not None:
@@ -489,7 +599,8 @@ def main():
         output_path=f"{dirs['results']}/latent_barycenters_only.png",
         title="Latent Space - E(3D Barycenters)",
         show_barycenters=True,
-        barycenter_size=6
+        barycenter_size=6,
+        cmap_barycenters='cool'  # E(3D barycenters) use cool colormap
     )
 
     # 3. Equilibrium only
@@ -523,7 +634,8 @@ def main():
         show_data=True,
         show_barycenters=True,
         show_equilibrium=True,
-        barycenter_size=6
+        barycenter_size=6,
+        cmap_barycenters='cool'  # E(3D barycenters) use cool colormap
     )
 
     # 6. Morse sets + E(Barycenters) + Equilibrium
@@ -537,7 +649,9 @@ def main():
         show_morse_sets=True,
         show_barycenters=True,
         show_equilibrium=True,
-        barycenter_size=6
+        barycenter_size=6,
+        cmap_morse_sets='viridis',    # 2D Morse sets use viridis
+        cmap_barycenters='cool'        # E(3D barycenters) use cool colormap
     )
 
     # 7-9. E(Period-12 orbit) visualizations
@@ -625,7 +739,7 @@ def main():
         z_train,
         output_path=f"{dirs['results']}/morse_2x2_comparison_padded.png",
         title_prefix="Ives - ",
-        equilibria={'Equilibrium': EQUILIBRIUM_POINT},
+        equilibria={'Equilibrium': EQUILIBRIUM_POINT} if EQUILIBRIUM_POINT is not None else None,
         periodic_orbits={'Period-12': PERIOD_12_ORBIT} if PERIOD_12_ORBIT is not None else None,
         equilibria_latent={'Equilibrium': equilibrium_latent},
         labels={'x': 'log(Midge)', 'y': 'log(Algae)', 'z': 'log(Detritus)'}
@@ -644,7 +758,7 @@ def main():
         z_large_grid,
         output_path=f"{dirs['results']}/morse_2x2_comparison_unpadded.png",
         title_prefix="Ives - ",
-        equilibria={'Equilibrium': EQUILIBRIUM_POINT},
+        equilibria={'Equilibrium': EQUILIBRIUM_POINT} if EQUILIBRIUM_POINT is not None else None,
         periodic_orbits={'Period-12': PERIOD_12_ORBIT} if PERIOD_12_ORBIT is not None else None,
         equilibria_latent={'Equilibrium': equilibrium_latent},
         labels={'x': 'log(Midge)', 'y': 'log(Algae)', 'z': 'log(Detritus)'}
@@ -709,16 +823,16 @@ def main():
         # 3D Morse graph
         'num_morse_sets_3d': result_3d['num_morse_sets'],
         'computation_time_3d': result_3d['computation_time'],
-        'was_3d_cached': was_cached,
+        'was_3d_cached': was_cached_3d,
 
         # 2D Morse graphs
-        'num_morse_sets_2d_padded': result_2d_padded['num_morse_sets'],
-        'num_morse_sets_2d_unpadded': result_2d_unpadded['num_morse_sets'],
+        'num_morse_sets_2d_padded': morse_graph_2d_padded.num_vertices(),
+        'num_morse_sets_2d_unpadded': morse_graph_2d_unpadded.num_vertices(),
 
         # Training
-        'training_time': training_result['training_time'],
-        'final_train_loss': training_result['train_losses']['total'][-1],
-        'final_val_loss': training_result['val_losses']['total'][-1],
+        'training_time': training_result.get('training_time', 0.0),
+        'final_train_loss': losses['train']['total'][-1],
+        'final_val_loss': losses['val']['total'][-1],
 
         # Analysis
         'n_test_trajectories': n_test_trajectories,
@@ -729,7 +843,7 @@ def main():
             'r1': R1, 'r2': R2, 'c': C, 'd': D, 'p': P, 'q': Q,
             'log_offset': LOG_OFFSET
         },
-        'equilibrium_point': EQUILIBRIUM_POINT.tolist(),
+        'equilibrium_point': EQUILIBRIUM_POINT.tolist() if EQUILIBRIUM_POINT is not None else None,
     }
 
     save_experiment_metadata(f"{dirs['base']}/metadata.json", config, results)
@@ -739,22 +853,29 @@ def main():
     print("="*80)
     print(f"\nResults Summary:")
     print(f"  Run Number:                 {run_number}")
-    print(f"  3D Morse Sets:              {results['num_morse_sets_3d']} {'(cached)' if was_cached else '(computed)'}")
+    print(f"  3D Morse Sets:              {results['num_morse_sets_3d']} {'(cached)' if was_cached_3d else '(computed)'}")
     print(f"  2D Morse Sets (Padded):     {results['num_morse_sets_2d_padded']}")
     print(f"  2D Morse Sets (Unpadded):   {results['num_morse_sets_2d_unpadded']}")
-    print(f"  Training Time:              {results['training_time']:.2f}s")
+    training_time_str = f"{results['training_time']:.2f}s" if results['training_time'] > 0 else "(cached)"
+    print(f"  Training Time:              {training_time_str}")
     print(f"  Final Train Loss:           {results['final_train_loss']:.6f}")
     print(f"  Final Val Loss:             {results['final_val_loss']:.6f}")
+    param_hash_short = result_3d['param_hash'][:8]
     print(f"\nOutput Structure:")
     print(f"  {base_output_dir}/")
-    print(f"  ├── cmgdb_3d/                 # Cached 3D Morse graph (reusable)")
-    print(f"  │   └── results/              # 3D visualizations (shared)")
+    print(f"  ├── cmgdb_3d/                 # Cached 3D Morse graphs (organized by parameter hash)")
+    print(f"  │   ├── {param_hash_short}.../         # This parameter configuration")
+    print(f"  │   │   ├── morse_graph_data.pkl")
+    print(f"  │   │   ├── barycenters.npz")
+    print(f"  │   │   ├── metadata.json")
+    print(f"  │   │   └── results/          # 3D visualizations for this config")
+    print(f"  │   └── <other_hashes>.../    # Other parameter configurations")
     print(f"  └── run_{run_number:03d}/               # This run's results")
     print(f"      ├── config.yaml")
     print(f"      ├── models/")
     print(f"      ├── training_data/")
     print(f"      └── results/              # 2D and analysis visualizations")
-    print(f"\n3D Visualizations (in cmgdb_3d/results/, shared across runs):")
+    print(f"\n3D Visualizations (in {results_3d_dir}/):")
     print(f"  - morse_graph_3d.png: 3D Morse graph diagram")
     print(f"  - morse_sets_3d.png: 3D scatter with barycenters (size ∝ box volume)")
     print(f"  - morse_sets_proj_01.png: Projection onto dims 0-1")

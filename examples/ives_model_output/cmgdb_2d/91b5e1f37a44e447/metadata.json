@@ -1,0 +1,16 @@
+{
+  "cmgdb_2d_hash": "91b5e1f37a44e447",
+  "timestamp": "2025-10-22T18:22:01.325997",
+  "config": {
+    "subdiv_min": 12,
+    "subdiv_max": 12,
+    "subdiv_init": 0,
+    "subdiv_limit": 100000,
+    "padding": true,
+    "bounds_padding": 1.01,
+    "original_grid_subdiv": 18,
+    "neighbor_radius_factor": 1.0
+  },
+  "num_morse_sets_padded": 1,
+  "num_morse_sets_unpadded": 1
+}

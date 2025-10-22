@@ -1,0 +1,21 @@
+{
+  "trajectory_hash": "601a77f679e17453",
+  "timestamp": "2025-10-22T18:12:35.264379",
+  "config": {
+    "n_trajectories": 10000,
+    "n_points": 20,
+    "skip_initial": 0,
+    "random_seed": 42
+  },
+  "data_shapes": {
+    "X": [
+      190000,
+      3
+    ],
+    "Y": [
+      190000,
+      3
+    ],
+    "n_trajectories": 10000
+  }
+}

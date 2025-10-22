@@ -876,6 +876,7 @@ class ExperimentConfig:
         latent_padding: bool = True,
         latent_bounds_padding: float = 1.01,
         original_grid_subdiv: int = 15,
+        neighbor_radius_factor: float = 1.0,
 
         # Large sample for domain-restricted computation
         large_sample_size: Optional[int] = None,
@@ -975,6 +976,7 @@ class ExperimentConfig:
         self.latent_padding = latent_padding
         self.latent_bounds_padding = latent_bounds_padding
         self.original_grid_subdiv = original_grid_subdiv
+        self.neighbor_radius_factor = neighbor_radius_factor
 
         # Large sample
         self.large_sample_size = large_sample_size
@@ -1213,6 +1215,708 @@ def compute_parameter_hash(
     return hash_full[:16]
 
 
+def compute_trajectory_hash(config, cmgdb_3d_hash: str) -> str:
+    """
+    Compute hash for trajectory data generation configuration.
+
+    This hash depends on the 3D CMGDB hash (which includes the map function
+    and domain) plus all trajectory generation parameters to enable caching
+    of generated trajectory data.
+
+    Args:
+        config: Experiment configuration object
+        cmgdb_3d_hash: Hash of 3D CMGDB computation (includes map and domain)
+
+    Returns:
+        SHA256 hash string (first 16 characters)
+    """
+    import hashlib
+    import json
+
+    params = {
+        # Dependency on 3D computation (includes map function and domain)
+        '3d_hash': cmgdb_3d_hash,
+
+        # Trajectory generation parameters
+        'n_trajectories': config.n_trajectories,
+        'n_points': config.n_points,
+        'skip_initial': config.skip_initial,
+        'random_seed': config.random_seed,
+    }
+
+    # Create sorted JSON string for consistent hashing
+    params_str = json.dumps(params, sort_keys=True)
+
+    # Compute SHA256 hash
+    hash_obj = hashlib.sha256(params_str.encode('utf-8'))
+    hash_full = hash_obj.hexdigest()
+
+    return hash_full[:16]
+
+
+def compute_training_hash(config, cmgdb_3d_hash: str) -> str:
+    """
+    Compute hash for training configuration.
+
+    This hash depends on the 3D CMGDB hash plus all training parameters
+    to enable caching of trained models.
+
+    Args:
+        config: Experiment configuration object
+        cmgdb_3d_hash: Hash of 3D CMGDB computation (dependency)
+
+    Returns:
+        SHA256 hash string (first 16 characters)
+    """
+    import hashlib
+    import json
+
+    params = {
+        # Dependency on 3D computation
+        '3d_hash': cmgdb_3d_hash,
+
+        # Training data generation
+        'n_trajectories': config.n_trajectories,
+        'n_points': config.n_points,
+        'skip_initial': config.skip_initial,
+        'random_seed': config.random_seed,
+
+        # Architecture
+        'input_dim': config.input_dim,
+        'latent_dim': config.latent_dim,
+        'hidden_dim': config.hidden_dim,
+        'num_layers': config.num_layers,
+
+        # Activation functions
+        'encoder_activation': str(config.encoder_activation),
+        'decoder_activation': str(config.decoder_activation),
+        'latent_dynamics_activation': str(config.latent_dynamics_activation),
+
+        # Training hyperparameters
+        'num_epochs': config.num_epochs,
+        'batch_size': config.batch_size,
+        'learning_rate': config.learning_rate,
+        'early_stopping_patience': config.early_stopping_patience,
+        'min_delta': config.min_delta,
+
+        # Loss weights
+        'w_recon': config.w_recon,
+        'w_dyn_recon': config.w_dyn_recon,
+        'w_dyn_cons': config.w_dyn_cons,
+    }
+
+    # Create sorted JSON string for consistent hashing
+    params_str = json.dumps(params, sort_keys=True)
+
+    # Compute SHA256 hash
+    hash_obj = hashlib.sha256(params_str.encode('utf-8'))
+    hash_full = hash_obj.hexdigest()
+
+    return hash_full[:16]
+
+
+def compute_cmgdb_2d_hash(config, training_hash: str) -> str:
+    """
+    Compute hash for 2D CMGDB configuration.
+
+    This hash depends on the training hash plus all 2D CMGDB parameters
+    to enable caching of 2D Morse graph computations.
+
+    Args:
+        config: Experiment configuration object
+        training_hash: Hash of training computation (dependency)
+
+    Returns:
+        SHA256 hash string (first 16 characters)
+    """
+    import hashlib
+    import json
+
+    params = {
+        # Dependency on training
+        'training_hash': training_hash,
+
+        # 2D CMGDB parameters
+        'subdiv_min': config.latent_subdiv_min,
+        'subdiv_max': config.latent_subdiv_max,
+        'subdiv_init': config.latent_subdiv_init,
+        'subdiv_limit': config.latent_subdiv_limit,
+        'padding': config.padding,
+        'latent_bounds_padding': config.latent_bounds_padding,
+
+        # Encoding grid resolution
+        'original_grid_subdiv': config.original_grid_subdiv,
+    }
+
+    # Create sorted JSON string for consistent hashing
+    params_str = json.dumps(params, sort_keys=True)
+
+    # Compute SHA256 hash
+    hash_obj = hashlib.sha256(params_str.encode('utf-8'))
+    hash_full = hash_obj.hexdigest()
+
+    return hash_full[:16]
+
+
+def load_or_train_autoencoder(
+    config,
+    training_hash: str,
+    training_data: Dict,
+    map_func: Callable,
+    output_dir: str = 'examples/ives_model_output',
+    force_retrain: bool = False
+) -> Tuple[Dict, bool]:
+    """
+    Load cached autoencoder models or train new ones if cache doesn't exist.
+
+    Args:
+        config: Configuration object with training parameters
+        training_hash: Hash identifying this training configuration
+        training_data: Dictionary with 'X_train', 'Xnext_train', 'X_val', 'Xnext_val' arrays
+        map_func: Original map function for validation
+        output_dir: Base output directory
+        force_retrain: If True, ignore cache and retrain
+
+    Returns:
+        Tuple of (training_result, was_cached):
+            - training_result: Dict with keys:
+                - 'encoder': Trained encoder model
+                - 'decoder': Trained decoder model
+                - 'latent_dynamics': Trained latent dynamics model
+                - 'training_losses': Dict of loss curves
+                - 'latent_bounds': Bounds of latent space
+                - 'config': Configuration used
+            - was_cached: True if loaded from cache, False if newly trained
+    """
+    import os
+    import pickle
+    import torch
+    import json
+    from datetime import datetime
+
+    # Define cache directory
+    cache_dir = os.path.join(output_dir, 'training', training_hash)
+    models_dir = os.path.join(cache_dir, 'models')
+    metadata_path = os.path.join(cache_dir, 'metadata.json')
+    losses_path = os.path.join(cache_dir, 'training_losses.pkl')
+    bounds_path = os.path.join(cache_dir, 'latent_bounds.npz')
+
+    encoder_path = os.path.join(models_dir, 'encoder.pt')
+    decoder_path = os.path.join(models_dir, 'decoder.pt')
+    latent_dynamics_path = os.path.join(models_dir, 'latent_dynamics.pt')
+
+    # Check if cache exists and is valid
+    cache_valid = (
+        os.path.exists(encoder_path) and
+        os.path.exists(decoder_path) and
+        os.path.exists(latent_dynamics_path) and
+        os.path.exists(metadata_path) and
+        os.path.exists(losses_path) and
+        os.path.exists(bounds_path)
+    )
+
+    if cache_valid and not force_retrain:
+        print(f"Loading cached training results from {cache_dir}")
+
+        # Load metadata
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+
+        # Load models
+        from MorseGraph.models import Encoder, Decoder, LatentDynamics
+
+        encoder = Encoder(
+            input_dim=config.input_dim,
+            latent_dim=config.latent_dim,
+            hidden_dim=config.hidden_dim,
+            num_layers=config.num_layers,
+            output_activation=config.encoder_activation
+        )
+        encoder.load_state_dict(torch.load(encoder_path))
+        encoder.eval()
+
+        decoder = Decoder(
+            latent_dim=config.latent_dim,
+            output_dim=config.input_dim,
+            hidden_dim=config.hidden_dim,
+            num_layers=config.num_layers,
+            output_activation=config.decoder_activation
+        )
+        decoder.load_state_dict(torch.load(decoder_path))
+        decoder.eval()
+
+        latent_dynamics = LatentDynamics(
+            latent_dim=config.latent_dim,
+            hidden_dim=config.hidden_dim,
+            num_layers=config.num_layers,
+            output_activation=config.latent_dynamics_activation
+        )
+        latent_dynamics.load_state_dict(torch.load(latent_dynamics_path))
+        latent_dynamics.eval()
+
+        # Load training losses
+        with open(losses_path, 'rb') as f:
+            training_losses = pickle.load(f)
+
+        # Load latent bounds
+        latent_bounds_data = np.load(bounds_path)
+        latent_bounds = latent_bounds_data['bounds']
+
+        training_result = {
+            'encoder': encoder,
+            'decoder': decoder,
+            'latent_dynamics': latent_dynamics,
+            'training_losses': training_losses,
+            'latent_bounds': latent_bounds,
+            'config': config,
+            'metadata': metadata
+        }
+
+        return training_result, True
+
+    else:
+        # Train new models
+        print(f"Training new autoencoder (hash: {training_hash})")
+
+        from MorseGraph.training import train_autoencoder_dynamics
+
+        training_result = train_autoencoder_dynamics(
+            x_train=training_data['X_train'],
+            y_train=training_data['Xnext_train'],
+            x_val=training_data['X_val'],
+            y_val=training_data['Xnext_val'],
+            config=config,
+            verbose=True,
+            progress_interval=100
+        )
+
+        # Create cache directory
+        os.makedirs(models_dir, exist_ok=True)
+
+        # Save models
+        torch.save(training_result['encoder'].state_dict(), encoder_path)
+        torch.save(training_result['decoder'].state_dict(), decoder_path)
+        torch.save(training_result['latent_dynamics'].state_dict(), latent_dynamics_path)
+
+        # Compute latent bounds from training data
+        device = training_result['device']
+        encoder = training_result['encoder']
+        with torch.no_grad():
+            z_train = encoder(torch.FloatTensor(training_data['X_train']).to(device)).cpu().numpy()
+
+        latent_bounds = compute_latent_bounds(z_train, padding_factor=config.latent_bounds_padding)
+
+        # Save training losses (combining train and val)
+        training_losses = {
+            'train': training_result['train_losses'],
+            'val': training_result['val_losses']
+        }
+        with open(losses_path, 'wb') as f:
+            pickle.dump(training_losses, f)
+
+        # Save latent bounds
+        np.savez(bounds_path, bounds=latent_bounds)
+
+        # Save metadata
+        metadata = {
+            'training_hash': training_hash,
+            'timestamp': datetime.now().isoformat(),
+            'config': {
+                'input_dim': config.input_dim,
+                'latent_dim': config.latent_dim,
+                'hidden_dim': config.hidden_dim,
+                'num_layers': config.num_layers,
+                'n_trajectories': config.n_trajectories,
+                'n_points': config.n_points,
+                'num_epochs': config.num_epochs,
+                'batch_size': config.batch_size,
+                'learning_rate': config.learning_rate,
+            }
+        }
+
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        print(f"Training results cached to {cache_dir}")
+
+        # Add latent_bounds and training_losses to result
+        training_result['latent_bounds'] = latent_bounds
+        training_result['training_losses'] = training_losses
+
+        return training_result, False
+
+
+def load_or_generate_trajectory_data(
+    config,
+    trajectory_hash: str,
+    map_func: Callable,
+    domain_bounds: np.ndarray,
+    output_dir: str = 'examples/ives_model_output',
+    force_regenerate: bool = False
+) -> Tuple[Dict, bool]:
+    """
+    Load cached trajectory data or generate new data if cache doesn't exist.
+
+    Args:
+        config: Configuration object with trajectory generation parameters
+        trajectory_hash: Hash identifying this trajectory configuration
+        map_func: Map function for trajectory generation
+        domain_bounds: Domain bounds for sampling initial conditions
+        output_dir: Base output directory
+        force_regenerate: If True, ignore cache and regenerate data
+
+    Returns:
+        Tuple of (trajectory_result, was_cached):
+            - trajectory_result: Dict with keys:
+                - 'X': Current states array
+                - 'Y': Next states array
+                - 'trajectories': List of trajectory arrays
+                - 'config': Configuration used
+            - was_cached: True if loaded from cache, False if newly generated
+    """
+    import os
+    import json
+    from datetime import datetime
+
+    # Define cache directory
+    cache_dir = os.path.join(output_dir, 'trajectory_data', trajectory_hash)
+    metadata_path = os.path.join(cache_dir, 'metadata.json')
+    X_path = os.path.join(cache_dir, 'X.npz')
+    Y_path = os.path.join(cache_dir, 'Y.npz')
+    trajectories_path = os.path.join(cache_dir, 'trajectories.npz')
+
+    # Check if cache exists and is valid
+    cache_valid = (
+        os.path.exists(X_path) and
+        os.path.exists(Y_path) and
+        os.path.exists(trajectories_path) and
+        os.path.exists(metadata_path)
+    )
+
+    if cache_valid and not force_regenerate:
+        print(f"Loading cached trajectory data from {cache_dir}")
+
+        # Load metadata
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+
+        # Load trajectory data
+        X_data = np.load(X_path)
+        X = X_data['X']
+
+        Y_data = np.load(Y_path)
+        Y = Y_data['Y']
+
+        trajectories_data = np.load(trajectories_path, allow_pickle=True)
+        trajectories = list(trajectories_data['trajectories'])
+
+        trajectory_result = {
+            'X': X,
+            'Y': Y,
+            'trajectories': trajectories,
+            'config': config,
+            'metadata': metadata
+        }
+
+        return trajectory_result, True
+
+    else:
+        # Generate new trajectory data
+        print(f"Generating trajectory data (hash: {trajectory_hash})")
+
+        X, Y, trajectories = generate_map_trajectory_data(
+            map_func,
+            config.n_trajectories,
+            config.n_points,
+            domain_bounds,
+            random_seed=config.random_seed,
+            skip_initial=config.skip_initial
+        )
+
+        # Create cache directory
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # Save trajectory data
+        np.savez(X_path, X=X)
+        np.savez(Y_path, Y=Y)
+        np.savez(trajectories_path, trajectories=trajectories)
+
+        # Save metadata
+        metadata = {
+            'trajectory_hash': trajectory_hash,
+            'timestamp': datetime.now().isoformat(),
+            'config': {
+                'n_trajectories': config.n_trajectories,
+                'n_points': config.n_points,
+                'skip_initial': config.skip_initial,
+                'random_seed': config.random_seed,
+            },
+            'data_shapes': {
+                'X': X.shape,
+                'Y': Y.shape,
+                'n_trajectories': len(trajectories),
+            }
+        }
+
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        print(f"Trajectory data cached to {cache_dir}")
+
+        trajectory_result = {
+            'X': X,
+            'Y': Y,
+            'trajectories': trajectories,
+            'config': config,
+            'metadata': metadata
+        }
+
+        return trajectory_result, False
+
+
+def load_or_compute_2d_morse_graphs(
+    config,
+    cmgdb_2d_hash: str,
+    encoder,
+    decoder,
+    latent_dynamics,
+    latent_bounds: np.ndarray,
+    map_func: Callable,
+    output_dir: str = 'examples/ives_model_output',
+    force_recompute: bool = False
+) -> Tuple[Dict, bool]:
+    """
+    Load cached 2D Morse graphs or compute new ones if cache doesn't exist.
+
+    Computes both padded and unpadded versions of the 2D Morse graph in latent space
+    using BoxMapData restricted to E(X).
+
+    Args:
+        config: Configuration object with 2D CMGDB parameters
+        cmgdb_2d_hash: Hash identifying this 2D CMGDB configuration
+        encoder: Trained encoder model
+        decoder: Trained decoder model
+        latent_dynamics: Trained latent dynamics model
+        latent_bounds: Bounds of latent space [2, 2] array
+        map_func: Original map function for reference
+        output_dir: Base output directory
+        force_recompute: If True, ignore cache and recompute
+
+    Returns:
+        Tuple of (morse_2d_result, was_cached):
+            - morse_2d_result: Dict with keys:
+                - 'morse_graph_padded': Padded 2D Morse graph
+                - 'barycenters_padded': Padded barycenters
+                - 'morse_graph_unpadded': Unpadded 2D Morse graph
+                - 'barycenters_unpadded': Unpadded barycenters
+                - 'config': Configuration used
+            - was_cached: True if loaded from cache, False if newly computed
+    """
+    import os
+    import pickle
+    import json
+    from datetime import datetime
+
+    # Define cache directory
+    cache_dir = os.path.join(output_dir, 'cmgdb_2d', cmgdb_2d_hash)
+    metadata_path = os.path.join(cache_dir, 'metadata.json')
+
+    # Paths for padded version
+    morse_graph_padded_path = os.path.join(cache_dir, 'morse_graph_padded.pkl')
+    barycenters_padded_path = os.path.join(cache_dir, 'barycenters_padded.npz')
+
+    # Paths for unpadded version
+    morse_graph_unpadded_path = os.path.join(cache_dir, 'morse_graph_unpadded.pkl')
+    barycenters_unpadded_path = os.path.join(cache_dir, 'barycenters_unpadded.npz')
+
+    # Check if cache exists and is valid
+    cache_valid = (
+        os.path.exists(morse_graph_padded_path) and
+        os.path.exists(barycenters_padded_path) and
+        os.path.exists(morse_graph_unpadded_path) and
+        os.path.exists(barycenters_unpadded_path) and
+        os.path.exists(metadata_path)
+    )
+
+    if cache_valid and not force_recompute:
+        print(f"Loading cached 2D Morse graphs from {cache_dir}")
+
+        # Load metadata
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+
+        # Load padded Morse graph
+        with open(morse_graph_padded_path, 'rb') as f:
+            morse_graph_padded_nx = pickle.load(f)
+        morse_graph_padded = CachedMorseGraph(morse_graph_padded_nx)
+
+        # Load padded barycenters - reconstruct dict from npz format
+        barycenters_padded_data = np.load(barycenters_padded_path)
+        barycenters_padded = {}
+        for key in barycenters_padded_data.files:
+            if key.startswith('morse_set_'):
+                morse_set_id = int(key.split('_')[-1])
+                barycenters_padded[morse_set_id] = barycenters_padded_data[key]
+
+        # Load unpadded Morse graph
+        with open(morse_graph_unpadded_path, 'rb') as f:
+            morse_graph_unpadded_nx = pickle.load(f)
+        morse_graph_unpadded = CachedMorseGraph(morse_graph_unpadded_nx)
+
+        # Load unpadded barycenters - reconstruct dict from npz format
+        barycenters_unpadded_data = np.load(barycenters_unpadded_path)
+        barycenters_unpadded = {}
+        for key in barycenters_unpadded_data.files:
+            if key.startswith('morse_set_'):
+                morse_set_id = int(key.split('_')[-1])
+                barycenters_unpadded[morse_set_id] = barycenters_unpadded_data[key]
+
+        morse_2d_result = {
+            'morse_graph_padded': morse_graph_padded,
+            'barycenters_padded': barycenters_padded,
+            'morse_graph_unpadded': morse_graph_unpadded,
+            'barycenters_unpadded': barycenters_unpadded,
+            'config': config,
+            'metadata': metadata
+        }
+
+        return morse_2d_result, True
+
+    else:
+        # Compute new 2D Morse graphs using BoxMapData
+        print(f"Computing 2D Morse graphs (hash: {cmgdb_2d_hash})")
+
+        from MorseGraph.core import compute_morse_graph_2d_data
+        import torch
+        import networkx as nx
+        import pickle
+
+        # Get device from encoder
+        device = next(encoder.parameters()).device
+
+        # Generate dense uniform grid in original space for encoding
+        print("\nGenerating dense uniform grid in original space...")
+        original_grid_subdiv = config.original_grid_subdiv
+        n_per_dim = 2 ** (original_grid_subdiv // 3)
+        print(f"  Grid: {n_per_dim} points per dimension ({n_per_dim**3} total)")
+
+        # Create meshgrid for 3D space
+        from MorseGraph.config import load_experiment_config
+        # Get domain bounds from config
+        if hasattr(config, 'domain_bounds'):
+            domain_bounds = config.domain_bounds
+        else:
+            raise ValueError("Config must have domain_bounds")
+
+        grid_1d = [np.linspace(domain_bounds[0][i], domain_bounds[1][i], n_per_dim)
+                   for i in range(3)]
+        mesh = np.meshgrid(*grid_1d, indexing='ij')
+        X_large_grid = np.stack([m.flatten() for m in mesh], axis=1)
+        print(f"  Generated {len(X_large_grid)} grid points in original space")
+
+        # Encode grid to latent space
+        with torch.no_grad():
+            z_large_grid = encoder(torch.FloatTensor(X_large_grid).to(device)).cpu().numpy()
+        print(f"  Encoded to latent space: {z_large_grid.shape}")
+
+        # --- Padded Computation (using BoxMapData) ---
+        print("\nMethod 1: BoxMapData restricted to E(X) + Padding...")
+        result_2d_padded = compute_morse_graph_2d_data(
+            latent_dynamics, device, z_large_grid, latent_bounds.tolist(),
+            subdiv_min=config.latent_subdiv_min, subdiv_max=config.latent_subdiv_max,
+            subdiv_init=config.latent_subdiv_init, subdiv_limit=config.latent_subdiv_limit,
+            neighbor_radius_factor=config.neighbor_radius_factor,
+            padding=True,
+            cache_dir=None,  # Don't use internal cache
+            use_cache=False,
+            verbose=True
+        )
+        morse_graph_padded_cmgdb = result_2d_padded['morse_graph']
+        
+        barycenters_padded = {}
+        for i in range(morse_graph_padded_cmgdb.num_vertices()):
+            boxes = morse_graph_padded_cmgdb.morse_set_boxes(i)
+            barycenters_padded[i] = [np.array([(box[j] + box[j + 2]) / 2.0 for j in range(2)]) for box in boxes] if boxes else []
+
+        nx_graph_padded = nx.DiGraph()
+        for v in range(morse_graph_padded_cmgdb.num_vertices()):
+            boxes = morse_graph_padded_cmgdb.morse_set_boxes(v)
+            nx_graph_padded.add_node(v, morse_set_boxes=[list(b) for b in boxes] if boxes else [])
+        for v in range(morse_graph_padded_cmgdb.num_vertices()):
+            for target in morse_graph_padded_cmgdb.adjacencies(v):
+                nx_graph_padded.add_edge(v, target)
+
+        # --- Unpadded Computation (using BoxMapData) ---
+        print("\nMethod 2: BoxMapData restricted to E(X) + No Padding...")
+        result_2d_unpadded = compute_morse_graph_2d_data(
+            latent_dynamics, device, z_large_grid, latent_bounds.tolist(),
+            subdiv_min=config.latent_subdiv_min, subdiv_max=config.latent_subdiv_max,
+            subdiv_init=config.latent_subdiv_init, subdiv_limit=config.latent_subdiv_limit,
+            neighbor_radius_factor=config.neighbor_radius_factor,
+            padding=False,
+            cache_dir=None,  # Don't use internal cache
+            use_cache=False,
+            verbose=True
+        )
+        morse_graph_unpadded_cmgdb = result_2d_unpadded['morse_graph']
+
+        barycenters_unpadded = {}
+        for i in range(morse_graph_unpadded_cmgdb.num_vertices()):
+            boxes = morse_graph_unpadded_cmgdb.morse_set_boxes(i)
+            barycenters_unpadded[i] = [np.array([(box[j] + box[j + 2]) / 2.0 for j in range(2)]) for box in boxes] if boxes else []
+
+        nx_graph_unpadded = nx.DiGraph()
+        for v in range(morse_graph_unpadded_cmgdb.num_vertices()):
+            boxes = morse_graph_unpadded_cmgdb.morse_set_boxes(v)
+            nx_graph_unpadded.add_node(v, morse_set_boxes=[list(b) for b in boxes] if boxes else [])
+        for v in range(morse_graph_unpadded_cmgdb.num_vertices()):
+            for target in morse_graph_unpadded_cmgdb.adjacencies(v):
+                nx_graph_unpadded.add_edge(v, target)
+
+        # --- Caching ---
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(morse_graph_padded_path, 'wb') as f:
+            pickle.dump(nx_graph_padded, f)
+        np.savez(barycenters_padded_path, **{f'morse_set_{k}': v for k, v in barycenters_padded.items()})
+        with open(morse_graph_unpadded_path, 'wb') as f:
+            pickle.dump(nx_graph_unpadded, f)
+        np.savez(barycenters_unpadded_path, **{f'morse_set_{k}': v for k, v in barycenters_unpadded.items()})
+
+        # Save metadata
+        metadata = {
+            'cmgdb_2d_hash': cmgdb_2d_hash,
+            'timestamp': datetime.now().isoformat(),
+            'config': {
+                'subdiv_min': config.latent_subdiv_min,
+                'subdiv_max': config.latent_subdiv_max,
+                'subdiv_init': config.latent_subdiv_init,
+                'subdiv_limit': config.latent_subdiv_limit,
+                'padding': config.latent_padding,
+                'bounds_padding': config.latent_bounds_padding,
+                'original_grid_subdiv': config.original_grid_subdiv,
+                'neighbor_radius_factor': config.neighbor_radius_factor,
+            },
+            'num_morse_sets_padded': nx_graph_padded.number_of_nodes(),
+            'num_morse_sets_unpadded': nx_graph_unpadded.number_of_nodes(),
+        }
+
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        print(f"2D Morse graphs cached to {cache_dir}")
+
+        morse_2d_result = {
+            'morse_graph_padded': CachedMorseGraph(nx_graph_padded),
+            'barycenters_padded': barycenters_padded,
+            'morse_graph_unpadded': CachedMorseGraph(nx_graph_unpadded),
+            'barycenters_unpadded': barycenters_unpadded,
+            'config': config,
+            'metadata': metadata
+        }
+
+        return morse_2d_result, False
+
+
 def get_cache_path(cache_dir: str, param_hash: str) -> Dict[str, str]:
     """
     Get cache file paths for a given parameter hash.
@@ -1243,6 +1947,56 @@ def get_cache_path(cache_dir: str, param_hash: str) -> Dict[str, str]:
     }
 
 
+
+class CachedMorseGraph:
+    """
+    Lightweight wrapper for cached Morse graph data that mimics CMGDB.MorseGraph interface.
+
+    Uses NetworkX DiGraph internally for easy graph manipulation while providing
+    CMGDB-compatible interface. This avoids dealing with C++ chomp DirectedGraph
+    structure and allows full Python-based graph analysis.
+    """
+    def __init__(self, graph=None):
+        """
+        Args:
+            graph: NetworkX DiGraph with morse_set_boxes stored as node attributes.
+                   If None, creates empty graph.
+        """
+        import networkx as nx
+
+        if graph is None:
+            self._graph = nx.DiGraph()
+        else:
+            self._graph = graph
+
+    @property
+    def graph(self):
+        """Access underlying NetworkX DiGraph for advanced analysis."""
+        return self._graph
+
+    def num_vertices(self) -> int:
+        """Return number of vertices in the Morse graph."""
+        return self._graph.number_of_nodes()
+
+    def vertices(self) -> list:
+        """Return list of vertex IDs."""
+        return list(self._graph.nodes())
+
+    def adjacencies(self, vertex: int) -> list:
+        """Return list of vertices that the given vertex has edges to."""
+        return list(self._graph.successors(vertex))
+
+    def morse_set_boxes(self, vertex: int) -> list:
+        """Return list of boxes for the given Morse set."""
+        if vertex not in self._graph.nodes:
+            return []
+        return self._graph.nodes[vertex].get('morse_set_boxes', [])
+
+    def edges(self) -> list:
+        """Return list of edges as (source, target) tuples."""
+        return list(self._graph.edges())
+
+
 def save_morse_graph_cache(
     morse_graph,
     map_graph,
@@ -1256,7 +2010,7 @@ def save_morse_graph_cache(
     Save CMGDB Morse graph computation to cache.
 
     Saves three files to enable future loading:
-    1. morse_graph_data: CMGDB native format (MorseGraph only)
+    1. morse_graph_data.pkl: Serialized graph structure and boxes
     2. barycenters.npz: NumPy archive of barycenter coordinates
     3. metadata.json: Parameters and computation info
 
@@ -1280,6 +2034,7 @@ def save_morse_graph_cache(
         ... )
     """
     import json
+    import pickle
     from datetime import datetime
 
     try:
@@ -1312,9 +2067,28 @@ def save_morse_graph_cache(
     with open(paths['metadata'], 'w') as f:
         json.dump(metadata_with_timestamp, f, indent=2)
 
-    # Save CMGDB MorseGraph using native format (compatible with CMGDB.MorseGraph() constructor)
-    # Note: We don't cache map_graph since it's not needed for visualization/analysis
-    morse_graph.save(paths['morse_graph'])
+    # Build NetworkX DiGraph from CMGDB MorseGraph
+    import networkx as nx
+
+    graph = nx.DiGraph()
+    num_verts = morse_graph.num_vertices()
+
+    # Add nodes with morse_set_boxes as attributes
+    for v in range(num_verts):
+        boxes = morse_graph.morse_set_boxes(v)
+        # Convert boxes to list of lists for proper serialization
+        boxes_serializable = [list(box) for box in boxes] if boxes else []
+        graph.add_node(v, morse_set_boxes=boxes_serializable)
+
+    # Add edges
+    for v in range(num_verts):
+        adjacent = morse_graph.adjacencies(v)
+        for target in adjacent:
+            graph.add_edge(v, target)
+
+    # Save NetworkX graph using pickle
+    with open(paths['morse_graph'], 'wb') as f:
+        pickle.dump(graph, f)
 
     if verbose:
         print(f"  Cached Morse graph to: {paths['dir']}")
@@ -1335,7 +2109,7 @@ def load_morse_graph_cache(
 
     Returns:
         Dictionary with loaded data if cache exists, None otherwise:
-            - 'morse_graph': CMGDB MorseGraph object
+            - 'morse_graph': CMGDB MorseGraph object (or CachedMorseGraph wrapper)
             - 'barycenters': Dict mapping Morse set index to list of barycenters
             - 'metadata': Cached metadata dict
             - 'num_morse_sets': Number of Morse sets
@@ -1348,13 +2122,7 @@ def load_morse_graph_cache(
         ...     print(f"Loaded {cached['num_morse_sets']} Morse sets from cache")
     """
     import json
-
-    try:
-        import CMGDB
-    except ImportError:
-        if verbose:
-            print("  WARNING: CMGDB not available, cannot load cache")
-        return None
+    import pickle
 
     # Get cache paths
     paths = get_cache_path(cache_dir, param_hash)
@@ -1364,8 +2132,12 @@ def load_morse_graph_cache(
         return None
 
     try:
-        # Load morse graph
-        morse_graph = CMGDB.MorseGraph(paths['morse_graph'])
+        # Load NetworkX graph from pickle
+        with open(paths['morse_graph'], 'rb') as f:
+            nx_graph = pickle.load(f)
+
+        # Wrap in CachedMorseGraph for CMGDB-compatible interface
+        morse_graph = CachedMorseGraph(nx_graph)
 
         # Load barycenters
         barycenters = {}
@@ -1405,7 +2177,7 @@ def load_morse_graph_cache(
             error_msg = str(e)
 
             # Provide helpful error messages based on error type
-            if "input stream" in error_msg.lower() or "stream error" in error_msg.lower():
+            if "pickle" in error_msg.lower() or "unpickling" in error_msg.lower():
                 print(f"  WARNING: Cache file corrupted or incompatible format")
                 print(f"           Error: {error_type}: {error_msg}")
                 print(f"           Cache location: {paths['dir']}")
@@ -1435,12 +2207,24 @@ def load_or_compute_3d_morse_graph(
     labels: Optional[Dict[str, str]] = None
 ) -> Tuple[Dict[str, Any], bool]:
     """
-    Load 3D Morse graph from cmgdb_3d/ cache or compute if not found.
+    Load 3D Morse graph from cmgdb_3d/{hash}/ cache or compute if not found.
 
     This function implements a reusable caching strategy for expensive 3D CMGDB
-    computations. It checks for an existing cmgdb_3d/ directory and tries to load
-    cached results. If cache is not found or loading fails, it computes the Morse
-    graph and saves it to cmgdb_3d/ for future use.
+    computations. Results are organized by parameter hash, allowing multiple
+    parameter configurations to coexist without overwriting each other.
+
+    Directory structure:
+        cmgdb_3d/
+          ├── {hash1}/
+          │   ├── morse_graph_data.pkl
+          │   ├── barycenters.npz
+          │   ├── metadata.json
+          │   └── results/
+          │       ├── morse_graph_3d.png
+          │       ├── morse_sets_3d.png
+          │       └── morse_sets_proj_*.png
+          └── {hash2}/
+              └── ...
 
     When computing, also generates and saves standard visualizations:
     - Morse graph diagram
@@ -1465,6 +2249,7 @@ def load_or_compute_3d_morse_graph(
     Returns:
         Tuple of (result_dict, was_cached) where:
             - result_dict: Same format as compute_morse_graph_3d() output
+                          plus 'param_hash' and 'cache_path'
             - was_cached: True if loaded from cache, False if computed
 
     Example:
@@ -1475,35 +2260,36 @@ def load_or_compute_3d_morse_graph(
         ...     periodic_orbits={'Period-12': period_12_orbit},
         ...     labels={'x': 'log(M)', 'y': 'log(A)', 'z': 'log(D)'}
         ... )
-        >>> if was_cached:
-        ...     print("Loaded from cache!")
-        >>> else:
-        ...     print("Computed and saved to cmgdb_3d/")
+        >>> print(f"Hash: {result_3d['param_hash']}")
+        >>> print(f"Cached: {was_cached}")
     """
     from MorseGraph.core import compute_morse_graph_3d
     from MorseGraph.plot import plot_morse_graph_diagram, plot_morse_sets_3d_scatter
     import json
     from datetime import datetime
 
+    # Compute hash of current parameters
+    param_hash = compute_parameter_hash(
+        map_func,
+        domain_bounds,
+        subdiv_min,
+        subdiv_max,
+        subdiv_init,
+        subdiv_limit,
+        padding
+    )
+
     cmgdb_3d_dir = os.path.join(base_dir, 'cmgdb_3d')
-    cache_metadata_path = os.path.join(cmgdb_3d_dir, 'metadata.json')
-    results_dir = os.path.join(cmgdb_3d_dir, 'results')
+
+    # Get paths for this specific parameter configuration
+    cache_paths = get_cache_path(cmgdb_3d_dir, param_hash)
+    cache_subdir = cache_paths['dir']
+    results_dir = os.path.join(cache_subdir, 'results')
 
     # Try to load from cache if it exists and not forcing recompute
-    if not force_recompute and os.path.exists(cmgdb_3d_dir):
+    if not force_recompute and os.path.exists(cache_subdir):
         if verbose:
-            print(f"\nFound existing cmgdb_3d/ directory, attempting to load...")
-
-        # Compute hash of current parameters
-        param_hash = compute_parameter_hash(
-            map_func,
-            domain_bounds,
-            subdiv_min,
-            subdiv_max,
-            subdiv_init,
-            subdiv_limit,
-            padding
-        )
+            print(f"\nFound cache for parameters (hash: {param_hash[:8]}...), attempting to load...")
 
         # Try to load cached data
         cached = load_morse_graph_cache(cmgdb_3d_dir, param_hash, verbose=verbose)
@@ -1516,21 +2302,24 @@ def load_or_compute_3d_morse_graph(
                 'num_morse_sets': cached['num_morse_sets'],
                 'computation_time': cached['metadata'].get('computation_time', 0.0),
                 'cached': True,
-                'cache_path': cmgdb_3d_dir
+                'cache_path': cache_subdir,
+                'param_hash': param_hash
             }
             if verbose:
                 print(f"  ✓ Successfully loaded 3D Morse graph from cache")
                 print(f"    Morse sets: {result_3d['num_morse_sets']}")
-                print(f"    Visualizations available in: {results_dir}/")
+                print(f"    Cache directory: {cache_subdir}")
+                print(f"    Visualizations: {results_dir}/")
             return result_3d, True
 
         else:
             if verbose:
-                print(f"  ✗ Cache load failed or parameters don't match, will recompute")
+                print(f"  ✗ Cache load failed, will recompute")
 
     # Compute from scratch
     if verbose:
-        print(f"\nComputing 3D Morse graph (will cache to cmgdb_3d/)...")
+        print(f"\nComputing 3D Morse graph (hash: {param_hash[:8]}...)...")
+        print(f"  Will cache to: {cache_subdir}")
 
     result_3d = compute_morse_graph_3d(
         map_func,
@@ -1540,20 +2329,42 @@ def load_or_compute_3d_morse_graph(
         subdiv_init=subdiv_init,
         subdiv_limit=subdiv_limit,
         padding=padding,
-        cache_dir=cmgdb_3d_dir,
-        use_cache=False,  # Don't use standard caching, we're handling it here
+        cache_dir=None,  # Don't use internal caching
+        use_cache=False,
         verbose=verbose
     )
 
-    # Create results directory
+    morse_graph_3d = result_3d['morse_graph']
+    barycenters_3d = result_3d['barycenters']
+    map_graph = result_3d.get('map_graph')
+
+    # Save to cache using save_morse_graph_cache
+    metadata = {
+        'subdiv_min': subdiv_min,
+        'subdiv_max': subdiv_max,
+        'subdiv_init': subdiv_init,
+        'subdiv_limit': subdiv_limit,
+        'padding': padding,
+        'domain_bounds': domain_bounds,
+        'computation_time': result_3d['computation_time'],
+    }
+
+    save_morse_graph_cache(
+        morse_graph_3d,
+        map_graph,
+        barycenters_3d,
+        metadata,
+        cache_dir=cmgdb_3d_dir,
+        param_hash=param_hash,
+        verbose=verbose
+    )
+
+    # Create results directory inside the hash directory
     os.makedirs(results_dir, exist_ok=True)
 
     # Generate and save visualizations
     if verbose:
         print(f"\n  Generating 3D visualizations...")
-
-    morse_graph_3d = result_3d['morse_graph']
-    barycenters_3d = result_3d['barycenters']
 
     # 1. Morse graph diagram
     plot_morse_graph_diagram(
@@ -1581,6 +2392,7 @@ def load_or_compute_3d_morse_graph(
     try:
         import CMGDB
         import matplotlib.pyplot as plt
+        from matplotlib import cm
 
         if labels is None:
             labels = {'x': 'X', 'y': 'Y', 'z': 'Z'}
@@ -1599,11 +2411,11 @@ def load_or_compute_3d_morse_graph(
             xlabel_key = ['x', 'y', 'z'][proj_dims[0]]
             ylabel_key = ['x', 'y', 'z'][proj_dims[1]]
 
-            # Use CMGDB's PlotMorseSets with projection
-            # Note: PlotMorseSets creates its own figure and doesn't accept ax parameter
+            # Use CMGDB's PlotMorseSets with projection and cool colormap
             CMGDB.PlotMorseSets(
                 morse_graph_3d,
                 proj_dims=proj_dims,
+                cmap=cm.cool,
                 fig_w=8,
                 fig_h=8,
                 xlabel=labels[xlabel_key],
@@ -1611,9 +2423,6 @@ def load_or_compute_3d_morse_graph(
                 fig_fname=output_file,
                 dpi=150
             )
-
-            # If we need to add equilibria, we'll need to do it in a second pass
-            # For now, keep it simple and just use CMGDB's output
 
             if verbose:
                 print(f"    ✓ Saved {proj_filename}")
@@ -1625,29 +2434,11 @@ def load_or_compute_3d_morse_graph(
         if verbose:
             print(f"    ⚠ Could not generate projection plots: {e}")
 
-    # Save metadata about this computation
-    os.makedirs(cmgdb_3d_dir, exist_ok=True)
-    metadata = {
-        'computed_at': datetime.now().isoformat(),
-        'num_morse_sets': result_3d['num_morse_sets'],
-        'computation_time': result_3d['computation_time'],
-        'parameters': {
-            'subdiv_min': subdiv_min,
-            'subdiv_max': subdiv_max,
-            'subdiv_init': subdiv_init,
-            'subdiv_limit': subdiv_limit,
-            'padding': padding,
-            'domain_bounds': domain_bounds,
-        }
-    }
-
-    with open(cache_metadata_path, 'w') as f:
-        json.dump(metadata, f, indent=2)
-
     if verbose:
-        print(f"\n  ✓ Saved 3D Morse graph and visualizations to: {cmgdb_3d_dir}")
+        print(f"\n  ✓ Saved 3D Morse graph and visualizations to: {cache_subdir}")
 
     result_3d['cached'] = False
-    result_3d['cache_path'] = cmgdb_3d_dir
+    result_3d['cache_path'] = cache_subdir
+    result_3d['param_hash'] = param_hash
 
     return result_3d, False

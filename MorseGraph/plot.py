@@ -1594,22 +1594,22 @@ def plot_2x2_morse_comparison(
     num_morse_sets_3d = morse_graph_3d.num_vertices()
     
     # Use CMGDB.PlotMorseGraph to generate Graphviz diagram
-    gv_source_3d = CMGDB.PlotMorseGraph(morse_graph_3d)
+    gv_source_3d = CMGDB.PlotMorseGraph(morse_graph_3d, cmap=cmap_3d)
     png_bytes_3d = gv_source_3d.pipe(format='png')
     img_3d = Image.open(BytesIO(png_bytes_3d))
-    
+
     ax1.imshow(img_3d)
     ax1.axis('off')
-    ax1.set_title(f'{title_prefix}3D Morse Graph ({num_morse_sets_3d} sets)', 
+    ax1.set_title(f'{title_prefix}3D Morse Graph ({num_morse_sets_3d} sets)',
                   fontsize=14, fontweight='bold')
-    
+
     # ===== Top-right: 2D Morse Graph Diagram (using CMGDB) =====
     ax2 = fig.add_subplot(2, 2, 2)
-    
+
     num_morse_sets_2d = morse_graph_2d.num_vertices()
-    
+
     # Use CMGDB.PlotMorseGraph to generate Graphviz diagram
-    gv_source_2d = CMGDB.PlotMorseGraph(morse_graph_2d)
+    gv_source_2d = CMGDB.PlotMorseGraph(morse_graph_2d, cmap=cmap_2d)
     png_bytes_2d = gv_source_2d.pipe(format='png')
     img_2d = Image.open(BytesIO(png_bytes_2d))
     
@@ -1728,12 +1728,13 @@ def plot_latent_space_flexible(
     show_equilibrium=False,
     show_period12=False,
     barycenter_size=6,
-    cmap_name='viridis'
+    cmap_morse_sets='viridis',
+    cmap_barycenters='cool'
 ):
     """
     Flexible latent space visualization with multiple display options.
     Uses rectangle patches for morse sets.
-    
+
     Args:
         z_data: Latent space data points (N x 2)
         morse_graph: CMGDB MorseGraph object
@@ -1749,14 +1750,16 @@ def plot_latent_space_flexible(
         show_equilibrium: Show equilibrium point
         show_period12: Show E(period-12 orbit)
         barycenter_size: Marker size for barycenters (4-9 recommended)
-        cmap_name: Colormap name for morse sets
+        cmap_morse_sets: Colormap name for 2D Morse sets (default: 'viridis')
+        cmap_barycenters: Colormap name for E(3D barycenters) (default: 'cool')
     """
     import matplotlib.pyplot as plt
     import matplotlib.cm as cm
-    
+
     fig, ax = plt.subplots(figsize=(10, 10))
-    
-    cmap = getattr(cm, cmap_name)
+
+    cmap_sets = getattr(cm, cmap_morse_sets)
+    cmap_barys = getattr(cm, cmap_barycenters)
     
     # Determine number of morse sets for coloring
     if morse_graph is not None:
@@ -1766,30 +1769,31 @@ def plot_latent_space_flexible(
     else:
         num_morse_sets = 1
 
-    # Create color map (ensure at least one color for barycenters even if no morse sets)
+    # Create color maps for both morse sets and barycenters
     num_colors = max(num_morse_sets, 1)
-    colors = [cmap(i / max(num_colors - 1, 1)) for i in range(num_colors)]
-    
+    colors_morse_sets = [cmap_sets(i / max(num_colors - 1, 1)) for i in range(num_colors)]
+    colors_barycenters = [cmap_barys(i / max(num_colors - 1, 1)) for i in range(num_colors)]
+
     # 1. Show data (background, if requested)
     if show_data and z_data is not None:
-        ax.scatter(z_data[:, 0], z_data[:, 1], 
+        ax.scatter(z_data[:, 0], z_data[:, 1],
                   c='lightgray', s=1, alpha=0.3, rasterized=True, zorder=1)
-    
-    # 2. Show morse sets using rectangle patches
+
+    # 2. Show morse sets using rectangle patches (2D computed - viridis)
     if show_morse_sets and morse_graph is not None:
         _plot_morse_sets_rectangles(
-            ax, morse_graph, colors,
+            ax, morse_graph, colors_morse_sets,
             alpha=0.5, zorder=2
         )
-    
-    # 3. Show E(3D barycenters)
+
+    # 3. Show E(3D barycenters) (from 3D - cool colormap)
     if show_barycenters and barycenters_latent is not None:
         for morse_idx, barys in barycenters_latent.items():
             if len(barys) > 0:
                 barys_array = np.array(barys)
-                color_idx = morse_idx if morse_idx < len(colors) else 0
+                color_idx = morse_idx if morse_idx < len(colors_barycenters) else 0
                 ax.scatter(barys_array[:, 0], barys_array[:, 1],
-                          c=[colors[color_idx]], s=barycenter_size,
+                          c=[colors_barycenters[color_idx]], s=barycenter_size,
                           alpha=0.8, marker='o', zorder=4,
                           label=f'E(Barycenters {morse_idx})')
     

@@ -1,0 +1,22 @@
+{
+  "subdiv_min": 30,
+  "subdiv_max": 36,
+  "subdiv_init": 0,
+  "subdiv_limit": 100000,
+  "padding": false,
+  "domain_bounds": [
+    [
+      -2.5,
+      -7.0,
+      -2.5
+    ],
+    [
+      1.5,
+      1.5,
+      1.5
+    ]
+  ],
+  "computation_time": 274.0986611843109,
+  "cached_at": "2025-10-21T11:43:05.339692",
+  "param_hash": "43b4c34d95f324be"
+}

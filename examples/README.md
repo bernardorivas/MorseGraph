@@ -197,11 +197,3 @@ When adding new examples:
 3. Make executable: `chmod +x example.py`
 4. Update this README
 5. Add to Quick Reference table
-
-## Support
-
-For issues or questions:
-
-- Check `generic_3d_pipeline/README.md` for detailed documentation
-- Review `CLAUDE.md` in project root for architecture details
-- See specific model directories (`ives_model/`, `leslie_map_3d/`) for advanced usage
