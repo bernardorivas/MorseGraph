@@ -707,7 +707,6 @@ def compute_morse_graph_2d_data(
     subdiv_max=28,
     subdiv_init=0,
     subdiv_limit=10000,
-    neighbor_radius_factor=1.0,
     padding=False,
     cache_dir=None,
     model_hash=None,
@@ -719,9 +718,8 @@ def compute_morse_graph_2d_data(
     Compute 2D latent Morse graph using CMGDB.BoxMapData restricted to E(X).
 
     This method uses CMGDB's BoxMapData to construct the box map from data pairs
-    (X, Y) where X = E(x_large_sample) and Y = G(X). Two-stage restriction:
-    1. BoxMapData with map_empty='outside': Boxes with no input X data map outside
-    2. Output validation: If output rectangle has no nearby Y data, map outside
+    (X, Y) where X = E(x_large_sample) and Y = G(X). Boxes with no input data
+    are mapped outside the domain via map_empty='outside'.
 
     Args:
         latent_dynamics: Trained latent dynamics model (PyTorch)
@@ -729,7 +727,6 @@ def compute_morse_graph_2d_data(
         z_data: Encoded data points in latent space (N x 2 array), i.e., E(x_large_sample)
         latent_bounds: [[lower_x, lower_y], [upper_x, upper_y]]
         subdiv_min, subdiv_max, subdiv_init, subdiv_limit: CMGDB parameters
-        neighbor_radius_factor: Multiplier for box width to determine "nearby" (default: 1.0)
         padding: Whether to enable padding in BoxMapData (default: False)
         cache_dir: Directory for caching results (None to disable)
         model_hash: Optional hash string identifying the trained model
@@ -744,8 +741,7 @@ def compute_morse_graph_2d_data(
         >>> result = compute_morse_graph_2d_data(
         ...     latent_dynamics, device, z_large,
         ...     latent_bounds=[[-3, -2], [3, 2]],
-        ...     neighbor_radius_factor=1.0,
-        ...     padding=False,
+        ...     padding=True,
         ...     cache_dir='./cache',
         ...     model_hash='abc123'
         ... )
@@ -757,17 +753,14 @@ def compute_morse_graph_2d_data(
         raise ImportError(f"Required package not available: {e}")
 
     import time
-    from scipy.spatial import cKDTree
     from .utils import compute_parameter_hash, load_morse_graph_cache, save_morse_graph_cache
 
     # Compute parameter hash for caching
     dummy_func = lambda x: x  # Placeholder
     extra_params = {
-        'method': 'boxmapdata_restricted',
+        'method': 'boxmapdata',
         'model_hash': model_hash,
         'data_size': len(z_data),
-        'neighbor_radius_factor': neighbor_radius_factor,
-        'padding': padding,
     }
     param_hash = compute_parameter_hash(
         dummy_func,
@@ -799,7 +792,6 @@ def compute_morse_graph_2d_data(
         print(f"Computing 2D Morse graph using BoxMapData restricted to E(X)...")
         print(f"  Latent bounds: {latent_bounds[0]} to {latent_bounds[1]}")
         print(f"  Data points: {len(z_data)}")
-        print(f"  Neighbor radius factor: {neighbor_radius_factor}")
         print(f"  Padding: {padding}")
 
     # Compute Y = G(X) where X = E(x_large_sample)
@@ -808,25 +800,11 @@ def compute_morse_graph_2d_data(
     with torch.no_grad():
         Y = latent_dynamics(torch.FloatTensor(z_data).to(device)).cpu().numpy()
 
-    # Build spatial index for Y (output data)
+    # Create BoxMapData - boxes with no input data map outside
     if verbose:
-        print(f"  Building spatial index for output data...")
-    tree_Y = cKDTree(Y)
-
-    # Calculate neighbor threshold based on box width at subdiv_max
-    lower = np.array(latent_bounds[0])
-    upper = np.array(latent_bounds[1])
-    dim = len(lower)
-    n_boxes_per_dim = 2 ** (subdiv_max // dim)  # 2D: subdiv_max=12 -> 2^6=64 per dim
-    box_widths = (upper - lower) / n_boxes_per_dim
-    neighbor_threshold = neighbor_radius_factor * np.linalg.norm(box_widths)
-
-    if verbose:
-        print(f"  Box width (subdiv_max={subdiv_max}): {box_widths}")
-        print(f"  Neighbor threshold: {neighbor_threshold:.6f}")
-
-    # Create base BoxMapData - handles empty input boxes
-    F_base = CMGDB.BoxMapData(
+        print(f"  Creating BoxMapData (map_empty='outside')...")
+    
+    F = CMGDB.BoxMapData(
         z_data, Y,
         map_empty='outside',
         lower_bounds=latent_bounds[0],
@@ -834,27 +812,6 @@ def compute_morse_graph_2d_data(
         domain_padding=True,  # Use domain padding for better coverage
         padding=padding  # Configurable padding on output
     )
-
-    # Wrapper to validate output region has nearby data
-    def F_restricted(rect):
-        # Get base box map (already handles empty input)
-        f_rect = F_base(rect)
-
-        # Check if f_rect is already mapped outside
-        if f_rect[0] > upper[0]:  # Already outside domain
-            return f_rect
-
-        # Check if output rectangle center has nearby Y data
-        f_center = np.array([(f_rect[d] + f_rect[d + dim])/2 for d in range(dim)])
-
-        # Query nearest Y point to output center
-        dist, _ = tree_Y.query(f_center)
-
-        # If output is far from any Y data, map outside
-        if dist > neighbor_threshold:
-            return list(upper + 1) + list(upper + 2)
-
-        return f_rect
 
     # Build model
     model = CMGDB.Model(
@@ -864,10 +821,12 @@ def compute_morse_graph_2d_data(
         subdiv_limit,
         latent_bounds[0],
         latent_bounds[1],
-        F_restricted
+        F
     )
 
     # Compute Morse graph
+    if verbose:
+        print(f"  Computing Morse graph...")
     start_time = time.time()
     morse_graph, map_graph = CMGDB.ComputeMorseGraph(model)
     computation_time = time.time() - start_time
@@ -877,6 +836,7 @@ def compute_morse_graph_2d_data(
         print(f"  Found {morse_graph.num_vertices()} Morse sets")
 
     # Compute barycenters for caching
+    dim = len(latent_bounds[0])
     barycenters = {}
     for i in range(morse_graph.num_vertices()):
         morse_set_boxes = morse_graph.morse_set_boxes(i)
@@ -889,13 +849,12 @@ def compute_morse_graph_2d_data(
     # Save to cache if requested
     if cache_dir is not None and model_hash is not None:
         metadata = {
-            'method': 'boxmapdata_restricted',
+            'method': 'boxmapdata',
             'latent_bounds': latent_bounds,
             'subdiv_min': subdiv_min,
             'subdiv_max': subdiv_max,
             'subdiv_init': subdiv_init,
             'subdiv_limit': subdiv_limit,
-            'neighbor_radius_factor': neighbor_radius_factor,
             'padding': padding,
             'model_hash': model_hash,
             'data_size': len(z_data),

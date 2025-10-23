@@ -876,7 +876,6 @@ class ExperimentConfig:
         latent_padding: bool = True,
         latent_bounds_padding: float = 1.01,
         original_grid_subdiv: int = 15,
-        neighbor_radius_factor: float = 1.0,
 
         # Large sample for domain-restricted computation
         large_sample_size: Optional[int] = None,
@@ -976,7 +975,6 @@ class ExperimentConfig:
         self.latent_padding = latent_padding
         self.latent_bounds_padding = latent_bounds_padding
         self.original_grid_subdiv = original_grid_subdiv
-        self.neighbor_radius_factor = neighbor_radius_factor
 
         # Large sample
         self.large_sample_size = large_sample_size
@@ -1686,10 +1684,9 @@ def load_or_compute_2d_morse_graphs(
     force_recompute: bool = False
 ) -> Tuple[Dict, bool]:
     """
-    Load cached 2D Morse graphs or compute new ones if cache doesn't exist.
+    Load cached 2D Morse graph or compute new one if cache doesn't exist.
 
-    Computes both padded and unpadded versions of the 2D Morse graph in latent space
-    using BoxMapData restricted to E(X).
+    Computes the 2D Morse graph in latent space using BoxMapData restricted to E(X).
 
     Args:
         config: Configuration object with 2D CMGDB parameters
@@ -1705,11 +1702,10 @@ def load_or_compute_2d_morse_graphs(
     Returns:
         Tuple of (morse_2d_result, was_cached):
             - morse_2d_result: Dict with keys:
-                - 'morse_graph_padded': Padded 2D Morse graph
-                - 'barycenters_padded': Padded barycenters
-                - 'morse_graph_unpadded': Unpadded 2D Morse graph
-                - 'barycenters_unpadded': Unpadded barycenters
+                - 'morse_graph': 2D Morse graph
+                - 'barycenters': Barycenters of Morse sets
                 - 'config': Configuration used
+                - 'metadata': Metadata dict
             - was_cached: True if loaded from cache, False if newly computed
     """
     import os
@@ -1720,62 +1716,39 @@ def load_or_compute_2d_morse_graphs(
     # Define cache directory
     cache_dir = os.path.join(output_dir, 'cmgdb_2d', cmgdb_2d_hash)
     metadata_path = os.path.join(cache_dir, 'metadata.json')
-
-    # Paths for padded version
-    morse_graph_padded_path = os.path.join(cache_dir, 'morse_graph_padded.pkl')
-    barycenters_padded_path = os.path.join(cache_dir, 'barycenters_padded.npz')
-
-    # Paths for unpadded version
-    morse_graph_unpadded_path = os.path.join(cache_dir, 'morse_graph_unpadded.pkl')
-    barycenters_unpadded_path = os.path.join(cache_dir, 'barycenters_unpadded.npz')
+    morse_graph_path = os.path.join(cache_dir, 'morse_graph.pkl')
+    barycenters_path = os.path.join(cache_dir, 'barycenters.npz')
 
     # Check if cache exists and is valid
     cache_valid = (
-        os.path.exists(morse_graph_padded_path) and
-        os.path.exists(barycenters_padded_path) and
-        os.path.exists(morse_graph_unpadded_path) and
-        os.path.exists(barycenters_unpadded_path) and
+        os.path.exists(morse_graph_path) and
+        os.path.exists(barycenters_path) and
         os.path.exists(metadata_path)
     )
 
     if cache_valid and not force_recompute:
-        print(f"Loading cached 2D Morse graphs from {cache_dir}")
+        print(f"Loading cached 2D Morse graph from {cache_dir}")
 
         # Load metadata
         with open(metadata_path, 'r') as f:
             metadata = json.load(f)
 
-        # Load padded Morse graph
-        with open(morse_graph_padded_path, 'rb') as f:
-            morse_graph_padded_nx = pickle.load(f)
-        morse_graph_padded = CachedMorseGraph(morse_graph_padded_nx)
+        # Load Morse graph
+        with open(morse_graph_path, 'rb') as f:
+            morse_graph_nx = pickle.load(f)
+        morse_graph = CachedMorseGraph(morse_graph_nx)
 
-        # Load padded barycenters - reconstruct dict from npz format
-        barycenters_padded_data = np.load(barycenters_padded_path)
-        barycenters_padded = {}
-        for key in barycenters_padded_data.files:
+        # Load barycenters - reconstruct dict from npz format
+        barycenters_data = np.load(barycenters_path)
+        barycenters = {}
+        for key in barycenters_data.files:
             if key.startswith('morse_set_'):
                 morse_set_id = int(key.split('_')[-1])
-                barycenters_padded[morse_set_id] = barycenters_padded_data[key]
-
-        # Load unpadded Morse graph
-        with open(morse_graph_unpadded_path, 'rb') as f:
-            morse_graph_unpadded_nx = pickle.load(f)
-        morse_graph_unpadded = CachedMorseGraph(morse_graph_unpadded_nx)
-
-        # Load unpadded barycenters - reconstruct dict from npz format
-        barycenters_unpadded_data = np.load(barycenters_unpadded_path)
-        barycenters_unpadded = {}
-        for key in barycenters_unpadded_data.files:
-            if key.startswith('morse_set_'):
-                morse_set_id = int(key.split('_')[-1])
-                barycenters_unpadded[morse_set_id] = barycenters_unpadded_data[key]
+                barycenters[morse_set_id] = barycenters_data[key]
 
         morse_2d_result = {
-            'morse_graph_padded': morse_graph_padded,
-            'barycenters_padded': barycenters_padded,
-            'morse_graph_unpadded': morse_graph_unpadded,
-            'barycenters_unpadded': barycenters_unpadded,
+            'morse_graph': morse_graph,
+            'barycenters': barycenters,
             'config': config,
             'metadata': metadata
         }
@@ -1783,8 +1756,8 @@ def load_or_compute_2d_morse_graphs(
         return morse_2d_result, True
 
     else:
-        # Compute new 2D Morse graphs using BoxMapData
-        print(f"Computing 2D Morse graphs (hash: {cmgdb_2d_hash})")
+        # Compute new 2D Morse graph using BoxMapData
+        print(f"Computing 2D Morse graph (hash: {cmgdb_2d_hash})")
 
         from MorseGraph.core import compute_morse_graph_2d_data
         import torch
@@ -1819,68 +1792,39 @@ def load_or_compute_2d_morse_graphs(
             z_large_grid = encoder(torch.FloatTensor(X_large_grid).to(device)).cpu().numpy()
         print(f"  Encoded to latent space: {z_large_grid.shape}")
 
-        # --- Padded Computation (using BoxMapData) ---
-        print("\nMethod 1: BoxMapData restricted to E(X) + Padding...")
-        result_2d_padded = compute_morse_graph_2d_data(
+        # Compute Morse graph using BoxMapData
+        print(f"\nComputing Morse graph using BoxMapData (padding={config.latent_padding})...")
+        result_2d = compute_morse_graph_2d_data(
             latent_dynamics, device, z_large_grid, latent_bounds.tolist(),
             subdiv_min=config.latent_subdiv_min, subdiv_max=config.latent_subdiv_max,
             subdiv_init=config.latent_subdiv_init, subdiv_limit=config.latent_subdiv_limit,
-            neighbor_radius_factor=config.neighbor_radius_factor,
-            padding=True,
+            padding=config.latent_padding,
             cache_dir=None,  # Don't use internal cache
             use_cache=False,
             verbose=True
         )
-        morse_graph_padded_cmgdb = result_2d_padded['morse_graph']
+        morse_graph_cmgdb = result_2d['morse_graph']
         
-        barycenters_padded = {}
-        for i in range(morse_graph_padded_cmgdb.num_vertices()):
-            boxes = morse_graph_padded_cmgdb.morse_set_boxes(i)
-            barycenters_padded[i] = [np.array([(box[j] + box[j + 2]) / 2.0 for j in range(2)]) for box in boxes] if boxes else []
+        # Extract barycenters
+        barycenters = {}
+        for i in range(morse_graph_cmgdb.num_vertices()):
+            boxes = morse_graph_cmgdb.morse_set_boxes(i)
+            barycenters[i] = [np.array([(box[j] + box[j + 2]) / 2.0 for j in range(2)]) for box in boxes] if boxes else []
 
-        nx_graph_padded = nx.DiGraph()
-        for v in range(morse_graph_padded_cmgdb.num_vertices()):
-            boxes = morse_graph_padded_cmgdb.morse_set_boxes(v)
-            nx_graph_padded.add_node(v, morse_set_boxes=[list(b) for b in boxes] if boxes else [])
-        for v in range(morse_graph_padded_cmgdb.num_vertices()):
-            for target in morse_graph_padded_cmgdb.adjacencies(v):
-                nx_graph_padded.add_edge(v, target)
+        # Convert to NetworkX for caching
+        nx_graph = nx.DiGraph()
+        for v in range(morse_graph_cmgdb.num_vertices()):
+            boxes = morse_graph_cmgdb.morse_set_boxes(v)
+            nx_graph.add_node(v, morse_set_boxes=[list(b) for b in boxes] if boxes else [])
+        for v in range(morse_graph_cmgdb.num_vertices()):
+            for target in morse_graph_cmgdb.adjacencies(v):
+                nx_graph.add_edge(v, target)
 
-        # --- Unpadded Computation (using BoxMapData) ---
-        print("\nMethod 2: BoxMapData restricted to E(X) + No Padding...")
-        result_2d_unpadded = compute_morse_graph_2d_data(
-            latent_dynamics, device, z_large_grid, latent_bounds.tolist(),
-            subdiv_min=config.latent_subdiv_min, subdiv_max=config.latent_subdiv_max,
-            subdiv_init=config.latent_subdiv_init, subdiv_limit=config.latent_subdiv_limit,
-            neighbor_radius_factor=config.neighbor_radius_factor,
-            padding=False,
-            cache_dir=None,  # Don't use internal cache
-            use_cache=False,
-            verbose=True
-        )
-        morse_graph_unpadded_cmgdb = result_2d_unpadded['morse_graph']
-
-        barycenters_unpadded = {}
-        for i in range(morse_graph_unpadded_cmgdb.num_vertices()):
-            boxes = morse_graph_unpadded_cmgdb.morse_set_boxes(i)
-            barycenters_unpadded[i] = [np.array([(box[j] + box[j + 2]) / 2.0 for j in range(2)]) for box in boxes] if boxes else []
-
-        nx_graph_unpadded = nx.DiGraph()
-        for v in range(morse_graph_unpadded_cmgdb.num_vertices()):
-            boxes = morse_graph_unpadded_cmgdb.morse_set_boxes(v)
-            nx_graph_unpadded.add_node(v, morse_set_boxes=[list(b) for b in boxes] if boxes else [])
-        for v in range(morse_graph_unpadded_cmgdb.num_vertices()):
-            for target in morse_graph_unpadded_cmgdb.adjacencies(v):
-                nx_graph_unpadded.add_edge(v, target)
-
-        # --- Caching ---
+        # Save to cache
         os.makedirs(cache_dir, exist_ok=True)
-        with open(morse_graph_padded_path, 'wb') as f:
-            pickle.dump(nx_graph_padded, f)
-        np.savez(barycenters_padded_path, **{f'morse_set_{k}': v for k, v in barycenters_padded.items()})
-        with open(morse_graph_unpadded_path, 'wb') as f:
-            pickle.dump(nx_graph_unpadded, f)
-        np.savez(barycenters_unpadded_path, **{f'morse_set_{k}': v for k, v in barycenters_unpadded.items()})
+        with open(morse_graph_path, 'wb') as f:
+            pickle.dump(nx_graph, f)
+        np.savez(barycenters_path, **{f'morse_set_{k}': v for k, v in barycenters.items()})
 
         # Save metadata
         metadata = {
@@ -1894,22 +1838,19 @@ def load_or_compute_2d_morse_graphs(
                 'padding': config.latent_padding,
                 'bounds_padding': config.latent_bounds_padding,
                 'original_grid_subdiv': config.original_grid_subdiv,
-                'neighbor_radius_factor': config.neighbor_radius_factor,
             },
-            'num_morse_sets_padded': nx_graph_padded.number_of_nodes(),
-            'num_morse_sets_unpadded': nx_graph_unpadded.number_of_nodes(),
+            'num_morse_sets': nx_graph.number_of_nodes(),
+            'num_edges': nx_graph.number_of_edges(),
         }
 
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
 
-        print(f"2D Morse graphs cached to {cache_dir}")
+        print(f"2D Morse graph cached to {cache_dir}")
 
         morse_2d_result = {
-            'morse_graph_padded': CachedMorseGraph(nx_graph_padded),
-            'barycenters_padded': barycenters_padded,
-            'morse_graph_unpadded': CachedMorseGraph(nx_graph_unpadded),
-            'barycenters_unpadded': barycenters_unpadded,
+            'morse_graph': CachedMorseGraph(nx_graph),
+            'barycenters': barycenters,
             'config': config,
             'metadata': metadata
         }

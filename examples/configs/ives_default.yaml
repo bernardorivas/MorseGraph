@@ -64,11 +64,10 @@ cmgdb_2d:
   padding: true       # Padding for latent space
   bounds_padding: 1.01  # Factor for bounding box of latent bounds
   original_grid_subdiv: 18  # Subdivision for uniform grid in original space (2^(N/3) points per dim)
-  neighbor_radius_factor: 1.0  # Multiplier for box width to determine "nearby data" (BoxMapData method)
 
 # Training data generation
 training:
-  n_trajectories: 10000  # Number of random trajectories to generate
+  n_trajectories: 5000  # Number of random trajectories to generate
   n_points: 20          # Points to sample from each trajectory
   skip_initial: 0       # Number of initial points to skip (transient)
   random_seed: 42       # Random seed for reproducibility

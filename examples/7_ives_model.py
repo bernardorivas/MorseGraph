@@ -511,15 +511,13 @@ def main():
         force_recompute=args.force_recompute_2d
     )
 
-    morse_graph_2d_padded = morse_2d_result['morse_graph_padded']
-    barycenters_2d_padded = morse_2d_result['barycenters_padded']
-    morse_graph_2d_unpadded = morse_2d_result['morse_graph_unpadded']
-    barycenters_2d_unpadded = morse_2d_result['barycenters_unpadded']
+    morse_graph_2d = morse_2d_result['morse_graph']
+    barycenters_2d = morse_2d_result['barycenters']
 
     if was_cached_2d:
-        print(f"\n✓ Using cached 2D Morse graphs (hash: {cmgdb_2d_hash})")
+        print(f"\n✓ Using cached 2D Morse graph (hash: {cmgdb_2d_hash})")
     else:
-        print(f"\n✓ Computed and cached 2D Morse graphs (hash: {cmgdb_2d_hash})")
+        print(f"\n✓ Computed and cached 2D Morse graph (hash: {cmgdb_2d_hash})")
 
     # ========================================================================
     # Step 5a: Generate Large Grid for Comparisons and Preimage Analysis
@@ -556,8 +554,8 @@ def main():
 
     # Padded Morse graph
     plot_morse_graph_diagram(
-        morse_graph_2d_padded,
-        output_path=f"{dirs['results']}/morse_graph_2d_padded.png",
+        morse_graph_2d,
+        output_path=f"{dirs['results']}/morse_graph_2d.png",
         title="Ives Model - Learned Latent Dynamics (2D) - Padded"
     )
 
@@ -585,7 +583,7 @@ def main():
 
     # 1. Morse sets only
     plot_latent_space_flexible(
-        morse_graph=morse_graph_2d_padded,
+        morse_graph=morse_graph_2d,
         latent_bounds=latent_bounds.tolist(),
         output_path=f"{dirs['results']}/latent_morse_sets_only.png",
         title="Latent Space - Morse Sets Only",
@@ -615,7 +613,7 @@ def main():
     # 4. Data + Morse sets
     plot_latent_space_flexible(
         z_data=z_train,
-        morse_graph=morse_graph_2d_padded,
+        morse_graph=morse_graph_2d,
         latent_bounds=latent_bounds.tolist(),
         output_path=f"{dirs['results']}/latent_data_morse_sets.png",
         title="Latent Space - Data + Morse Sets",
@@ -640,7 +638,7 @@ def main():
 
     # 6. Morse sets + E(Barycenters) + Equilibrium
     plot_latent_space_flexible(
-        morse_graph=morse_graph_2d_padded,
+        morse_graph=morse_graph_2d,
         barycenters_latent=barycenters_latent,
         equilibrium_latent=equilibrium_latent,
         latent_bounds=latent_bounds.tolist(),
@@ -678,7 +676,7 @@ def main():
 
         # Morse sets + orbit
         plot_latent_space_flexible(
-            morse_graph=morse_graph_2d_padded,
+            morse_graph=morse_graph_2d,
             period12_latent=period12_latent,
             latent_bounds=latent_bounds.tolist(),
             output_path=f"{dirs['results']}/latent_morse_period12.png",
@@ -689,81 +687,35 @@ def main():
 
     print("  ✓ Saved 9 enhanced latent space visualizations")
 
-    # Unpadded Morse graph
-    plot_morse_graph_diagram(
-        morse_graph_2d_unpadded,
-        output_path=f"{dirs['results']}/morse_graph_2d_unpadded.png",
-        title="Ives Model - Learned Latent Dynamics (2D) - Unpadded"
-    )
-
     # ========================================================================
-    # Step 6a: Comprehensive Morse Graph Comparison
+    # Step 6a: Morse Graph Comparison
     # ========================================================================
 
     print("\n" + "="*80)
-    print("STEP 6a: Comprehensive Morse Graph Comparison")
+    print("STEP 6a: Morse Graph Comparison")
     print("="*80)
 
-    comparison_stats = plot_morse_graph_comparison(
-        morse_graph_3d,
-        morse_graph_2d_padded,
-        morse_graph_2d_unpadded,
-        barycenters_3d,
-        encoder,
-        device,
-        z_train,
-        z_large_grid,
-        latent_bounds.tolist(),
-        config.domain_bounds,
-        output_path=f"{dirs['results']}/morse_graph_comparison.png",
-        title_prefix="Ives Model - ",
-        equilibria={'Equilibrium': EQUILIBRIUM_POINT},
-        equilibria_latent={'Equilibrium': equilibrium_latent},
-        labels={'x': 'log(Midge)', 'y': 'log(Algae)', 'z': 'log(Detritus)'}
-    )
-
-    print(f"  3D Morse Sets: {comparison_stats['num_morse_sets_3d']} ({comparison_stats['num_edges_3d']} edges)")
-    print(f"  2D Morse Sets (Padded): {comparison_stats['num_morse_sets_2d_data']} ({comparison_stats['num_edges_2d_data']} edges)")
-    print(f"  2D Morse Sets (Unpadded): {comparison_stats['num_morse_sets_2d_restricted']} ({comparison_stats['num_edges_2d_restricted']} edges)")
-    print("  ✓ Saved comprehensive comparison")
-
-    # Create 2x2 clean comparison (Padded method)
-    print("\n  Creating 2x2 comparison visualization (Padded method)...")
+    # Create 2x2 clean comparison
+    print("\n  Creating 2x2 comparison visualization...")
     plot_2x2_morse_comparison(
         morse_graph_3d,
-        morse_graph_2d_padded,
+        morse_graph_2d,
         config.domain_bounds,
         latent_bounds.tolist(),
         encoder,
         device,
         z_train,
-        output_path=f"{dirs['results']}/morse_2x2_comparison_padded.png",
+        output_path=f"{dirs['results']}/morse_2x2_comparison.png",
         title_prefix="Ives - ",
         equilibria={'Equilibrium': EQUILIBRIUM_POINT} if EQUILIBRIUM_POINT is not None else None,
         periodic_orbits={'Period-12': PERIOD_12_ORBIT} if PERIOD_12_ORBIT is not None else None,
         equilibria_latent={'Equilibrium': equilibrium_latent},
         labels={'x': 'log(Midge)', 'y': 'log(Algae)', 'z': 'log(Detritus)'}
     )
-    print("  ✓ Saved 2x2 comparison (Padded method)")
 
-    # Create 2x2 clean comparison (Unpadded method)
-    print("  Creating 2x2 comparison visualization (Unpadded method)...")
-    plot_2x2_morse_comparison(
-        morse_graph_3d,
-        morse_graph_2d_unpadded,
-        config.domain_bounds,
-        latent_bounds.tolist(),
-        encoder,
-        device,
-        z_large_grid,
-        output_path=f"{dirs['results']}/morse_2x2_comparison_unpadded.png",
-        title_prefix="Ives - ",
-        equilibria={'Equilibrium': EQUILIBRIUM_POINT} if EQUILIBRIUM_POINT is not None else None,
-        periodic_orbits={'Period-12': PERIOD_12_ORBIT} if PERIOD_12_ORBIT is not None else None,
-        equilibria_latent={'Equilibrium': equilibrium_latent},
-        labels={'x': 'log(Midge)', 'y': 'log(Algae)', 'z': 'log(Detritus)'}
-    )
-    print("  ✓ Saved 2x2 comparison (Unpadded method)")
+    print(f"  3D Morse Sets: {morse_graph_3d.num_vertices()}")
+    print(f"  2D Morse Sets: {morse_graph_2d.num_vertices()}")
+    print("  ✓ Saved 2x2 comparison")
 
     # ========================================================================
     # Step 6b: Preimage Classification Analysis
@@ -773,10 +725,10 @@ def main():
     print("STEP 6b: Preimage Classification Analysis")
     print("="*80)
 
-    # Analyze preimages for Padded method
-    print("  Analyzing preimages for Padded method...")
-    preimages_padded = plot_preimage_classification(
-        morse_graph_2d_padded,
+    # Analyze preimages
+    print("  Analyzing preimages...")
+    preimages = plot_preimage_classification(
+        morse_graph_2d,
         encoder,
         decoder,
         device,
@@ -784,32 +736,13 @@ def main():
         latent_bounds.tolist(),
         config.domain_bounds,
         subdiv_max=config.latent_subdiv_max,
-        output_path=f"{dirs['results']}/preimage_classification_padded.png",
+        output_path=f"{dirs['results']}/preimage_classification.png",
         title_prefix="Ives Model - ",
-        method_name="Padded",
+        method_name="BoxMapData",
         labels={'x': 'log(Midge)', 'y': 'log(Algae)', 'z': 'log(Detritus)'},
         max_points_per_set=2000
     )
-    print("  ✓ Saved preimage analysis (Padded method)")
-
-    # Analyze preimages for Unpadded method
-    print("  Analyzing preimages for Unpadded method...")
-    preimages_unpadded = plot_preimage_classification(
-        morse_graph_2d_unpadded,
-        encoder,
-        decoder,
-        device,
-        X_large_grid,
-        latent_bounds.tolist(),
-        config.domain_bounds,
-        subdiv_max=config.latent_subdiv_max,
-        output_path=f"{dirs['results']}/preimage_classification_unpadded.png",
-        title_prefix="Ives Model - ",
-        method_name="Unpadded",
-        labels={'x': 'log(Midge)', 'y': 'log(Algae)', 'z': 'log(Detritus)'},
-        max_points_per_set=2000
-    )
-    print("  ✓ Saved preimage analysis (Unpadded method)")
+    print("  ✓ Saved preimage analysis")
 
     # ========================================================================
     # Step 7: Save Results Summary
@@ -825,9 +758,8 @@ def main():
         'computation_time_3d': result_3d['computation_time'],
         'was_3d_cached': was_cached_3d,
 
-        # 2D Morse graphs
-        'num_morse_sets_2d_padded': morse_graph_2d_padded.num_vertices(),
-        'num_morse_sets_2d_unpadded': morse_graph_2d_unpadded.num_vertices(),
+        # 2D Morse graph
+        'num_morse_sets_2d': morse_graph_2d.num_vertices(),
 
         # Training
         'training_time': training_result.get('training_time', 0.0),
@@ -854,8 +786,7 @@ def main():
     print(f"\nResults Summary:")
     print(f"  Run Number:                 {run_number}")
     print(f"  3D Morse Sets:              {results['num_morse_sets_3d']} {'(cached)' if was_cached_3d else '(computed)'}")
-    print(f"  2D Morse Sets (Padded):     {results['num_morse_sets_2d_padded']}")
-    print(f"  2D Morse Sets (Unpadded):   {results['num_morse_sets_2d_unpadded']}")
+    print(f"  2D Morse Sets:              {results['num_morse_sets_2d']}")
     training_time_str = f"{results['training_time']:.2f}s" if results['training_time'] > 0 else "(cached)"
     print(f"  Training Time:              {training_time_str}")
     print(f"  Final Train Loss:           {results['final_train_loss']:.6f}")
@@ -900,14 +831,10 @@ def main():
     print(f"      - latent_data_period12.png: Data + E(period-12 orbit)")
     print(f"      - latent_morse_period12.png: Morse sets + E(period-12 orbit)")
     print(f"\n  Morse Graphs:")
-    print(f"    - morse_graph_2d_data.png: 2D Morse graph (Data)")
-    print(f"    - morse_graph_2d_restricted.png: 2D Morse graph (Restricted)")
+    print(f"    - morse_graph_2d.png: 2D Morse graph")
     print(f"\n  Comprehensive Comparisons:")
-    print(f"    - morse_graph_comparison.png: Side-by-side 3D vs 2D comparison (2x3 grid)")
-    print(f"    - morse_2x2_comparison_data.png: Clean 2x2 comparison (Data method)")
-    print(f"    - morse_2x2_comparison_restricted.png: Clean 2x2 comparison (Restricted method)")
-    print(f"    - preimage_classification_data.png: Preimage analysis - Data method")
-    print(f"    - preimage_classification_restricted.png: Preimage analysis - Restricted method")
+    print(f"    - morse_2x2_comparison.png: Clean 2x2 comparison (3D vs 2D)")
+    print(f"    - preimage_classification.png: Preimage analysis")
     print("="*80 + "\n")
 
 
