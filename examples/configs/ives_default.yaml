@@ -3,7 +3,7 @@
 #            dynamical states of midges in Lake Myvatn", Nature 452: 84-87
 
 system:
-  name: "Ives Ecological Model"
+  name: "ives_model_log"
   type: "map"
   description: "Midge-Algae-Detritus dynamics in log10 scale"
   reference: "Ives et al. (2008), Nature 452: 84-87"
@@ -39,9 +39,9 @@ domain:
 # 3D grid parameters (original space)
 cmgdb_3d:
   subdiv_min: 30          # Minimum subdivision depth
-  subdiv_max: 36          # Maximum subdivision depth
+  subdiv_max: 33          # Maximum subdivision depth
   subdiv_init: 0          # Initial subdivision depth
-  subdiv_limit: 100000    # Maximum number of boxes during refinement
+  subdiv_limit: 10000     # Maximum number of boxes during refinement
   padding: false          # Boundary padding enabled
 
 # 2D grid parameters (latent space)
