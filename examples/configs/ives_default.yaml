@@ -64,6 +64,7 @@ cmgdb_2d:
   padding: true       # Padding for latent space
   bounds_padding: 1.01  # Factor for bounding box of latent bounds
   original_grid_subdiv: 18  # Subdivision for uniform grid in original space (2^(N/3) points per dim)
+  method: "restricted"      # Default 2D Morse graph method (data, restricted, enclosure)
 
 # Training data generation
 training:
