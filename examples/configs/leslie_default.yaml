@@ -1,53 +1,38 @@
-# Ives Ecological Model (3D Map) - Default Configuration
-# Reference: Ives et al. (2008) "High-amplitude fluctuations and alternative
-#            dynamical states of midges in Lake Myvatn", Nature 452: 84-87
+# Leslie Population Model (3D Map) - Default Configuration
+# Reference: Leslie, P.H. (1945) "On the use of matrices in certain population
+#            mathematics", Biometrika 33(3): 183-212
 
 system:
-  name: "Ives Ecological Model"
+  name: "leslie_map_3d"
   type: "map"
-  description: "Midge-Algae-Detritus dynamics in log10 scale"
-  reference: "Ives et al. (2008), Nature 452: 84-87"
+  description: "Three-age-class structured population dynamics"
+  reference: "Leslie (1945), Biometrika 33(3): 183-212"
 
-# System parameters (log10 scale)
+# System parameters
 dynamics:
-  r1: 3.873           # Midge reproduction rate
-  r2: 11.746          # Algae growth rate
-  c: 3.67e-07         # Constant input of algae and detritus
-  d: 0.5517           # Detritus decay rate
-  p: 0.06659          # Relative palatability of detritus
-  q: 0.9026           # Exponent in midge consumption
-  log_offset: 0.00    # Offset for log transform
+  theta_1: 37.5           # Fertility parameter for age class 0
+  theta_2: 37.5           # Fertility parameter for age class 1
+  theta_3: 37.5           # Fertility parameter for age class 2
+  survival_1: 0.8         # Survival rate from age class 0 to 1
+  survival_2: 0.6         # Survival rate from age class 1 to 2
 
-# Computational domain (log10 scale)
+# Computational domain
 domain:
-  bounds: [[-2.5, -7.0, -2.5], [1.5, 1.5, 1.5]]
-  equilibrium: [0.792107, 0.209010, 0.376449]
-  period_12_orbit:
-    - [0.39160862, 0.91157773, 1.04565088]
-    - [0.88385738, 0.53734751, 1.13513858]
-    - [1.07430764, -6.43509285, 0.92947376]
-    - [0.45130625, -5.54559063, 0.27018157]
-    - [-0.20292393, -4.71170433, -0.39687693]
-    - [-0.86801275, -3.88600855, -1.06627693]
-    - [-1.52871692, -3.06107992, -1.73180035]
-    - [-2.00400249, -2.21426366, -2.27701846]
-    - [-1.78041095, -1.25478013, -2.09052584]
-    - [-1.29374168, -0.24533912, -1.22475073]
-    - [-0.73907562, 0.61025016, -0.22181353]
-    - [-0.16807606, 0.94248423, 0.64356429]
+  bounds: [[0.0, 0.0, 0.0], [140.0, 112.0, 72.0]]
+  equilibrium: [0.0, 0.0, 0.0]
 
 # 3D grid parameters (original space)
 cmgdb_3d:
   subdiv_min: 30          # Minimum subdivision depth
-  subdiv_max: 36          # Maximum subdivision depth
+  subdiv_max: 33          # Maximum subdivision depth
   subdiv_init: 0          # Initial subdivision depth
   subdiv_limit: 100000    # Maximum number of boxes during refinement
   padding: false          # Boundary padding enabled
 
 # 2D grid parameters (latent space)
 cmgdb_2d:
-  subdiv_min: 20          # Minimum subdivision depth
-  subdiv_max: 20          # Maximum subdivision depth
+  subdiv_min: 24          # Minimum subdivision depth
+  subdiv_max: 30          # Maximum subdivision depth
   subdiv_init: 0          # Initial subdivision depth
   subdiv_limit: 100000    # Maximum number of boxes during refinement
   padding: true           # Boundary padding enabled
@@ -79,10 +64,11 @@ model:
 
 # Loss function weights
 loss_weights:
-  w_recon: 500.0          # Reconstruction loss weight
+  w_recon: 1.0            # Reconstruction loss weight
   w_dyn_recon: 1.0        # Dynamics reconstruction loss weight
   w_dyn_cons: 1.0         # Dynamics consistency loss weight
 
 # Visualization
 visualization:
   n_grid_points: 50       # Grid resolution for visualization
+  trajectory_steps: 100   # Steps to simulate for trajectory analysis
