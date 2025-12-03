@@ -39,9 +39,11 @@ examples/leslie_map_3d_output/
 examples/output/
 examples/data/
 
-# ML models
+# ML models and data
 *.pt
 *.pth
+*.npz
+examples/data/learned_models/
 
 # Testing
 tests/
