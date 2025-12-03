@@ -708,132 +708,91 @@ class BoxMapODE(Dynamics):
 
 try:
     import torch
+    from typing import Union, Optional, Set
 
     class BoxMapLearnedLatent(Dynamics):
         """
-        Learned latent dynamics using PyTorch model G: ℝᵈ → ℝᵈ.
+        Learned latent dynamics G: R^d -> R^d using a neural network.
 
-        This class enables the use of neural network-based latent dynamics
-        in the MorseGraph framework. It applies a learned function G to
-        boxes in latent space, computing rigorous outer approximations
-        through sampling and bloating.
+        Supports:
+        1. Full Domain Evaluation (Method 2)
+        2. Restricted Domain Evaluation (Method 3) via allowed_indices
+        3. Rigorous Padding (epsilon L-infinity ball)
         """
-
-        def __init__(self, latent_dynamics_model, decoder_model=None, encoder_model=None,
-                     device=None, epsilon_bloat=None):
+        def __init__(self, 
+                     latent_dynamics_model, 
+                     device, 
+                     padding: Union[float, np.ndarray] = 0.0,
+                     allowed_indices: Optional[Set[int]] = None):
             """
-            Args:
-                latent_dynamics_model: Trained G (LatentDynamics model)
-                decoder_model: Trained D (Decoder), optional for debugging
-                encoder_model: Trained E (Encoder), optional for debugging
-                device: torch device (if None, uses 'cuda' if available else 'cpu')
-                epsilon_bloat: Bloating radius for rigorous outer approximation
+            :param latent_dynamics_model: PyTorch model G(z)
+            :param device: torch device
+            :param padding: Epsilon for output bloating (scalar or per-dimension)
+            :param allowed_indices: If Set[int], computation is restricted to these box indices.
+                                  If None, computation assumes full domain (Method 2).
             """
+            if torch is None:
+                raise ImportError("PyTorch required for BoxMapLearnedLatent")
+                
             self.G = latent_dynamics_model
-            self.D = decoder_model
-            self.E = encoder_model
+            self.device = device
+            self.padding = padding
+            self.allowed_indices = allowed_indices
 
-            if device is None:
-                self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            else:
-                self.device = device
-
-            self.epsilon_bloat = epsilon_bloat
+        def get_active_boxes(self, grid) -> np.ndarray:
+            """
+            If restricted domain is active, return only allowed indices.
+            Otherwise, return all grid indices.
+            """
+            if self.allowed_indices is not None:
+                # Convert set to sorted numpy array for determinism
+                return np.array(sorted(list(self.allowed_indices)))
+            return np.arange(len(grid.get_boxes()))
 
         def __call__(self, box: np.ndarray) -> np.ndarray:
             """
-            Compute image of box under learned latent dynamics G.
-
-            Args:
-                box: numpy array of shape (2, D) representing [min, max] in D dimensions
-
-            Returns:
-                numpy array of shape (2, D) representing image bounds
+            Compute F(box) = BoundingBox(G(samples)) + epsilon.
             """
-            # Strategy: Sample corners + center + edge midpoints, apply G, compute bounding box
-            # Then bloat by epsilon_bloat for rigorous outer approximation
-
-            dim = box.shape[1]
-
-            # Generate sample points from the box
-            # For D dimensions: 2^D corners + 1 center + 2D edge midpoints
-            sample_points = self._sample_box_points(box)
-
-            # Convert to tensor and apply model
-            sample_tensor = torch.FloatTensor(sample_points).to(self.device)
+            # Sample points (Corners + Center + Edge Midpoints for better coverage)
+            samples = self._sample_box_points(box)
+            
+            # Forward pass
+            samples_tensor = torch.FloatTensor(samples).to(self.device)
             with torch.no_grad():
-                image_points_tensor = self.G(sample_tensor)
-            image_points = image_points_tensor.cpu().numpy()
-
-            # Compute bounding box of the image points
-            min_bounds = np.min(image_points, axis=0)
-            max_bounds = np.max(image_points, axis=0)
-
-            # Enlarge the bounding box by epsilon_bloat
-            if self.epsilon_bloat is not None:
-                if isinstance(self.epsilon_bloat, np.ndarray):
-                    # Per-dimension bloating
-                    min_bounds -= self.epsilon_bloat
-                    max_bounds += self.epsilon_bloat
-                else:
-                    # Uniform bloating
-                    min_bounds -= self.epsilon_bloat
-                    max_bounds += self.epsilon_bloat
-
-            return np.array([min_bounds, max_bounds])
+                images_tensor = self.G(samples_tensor)
+            images = images_tensor.cpu().numpy()
+            
+            # Compute bounds
+            min_b = np.min(images, axis=0)
+            max_b = np.max(images, axis=0)
+            
+            # Apply L-infinity padding
+            min_b -= self.padding
+            max_b += self.padding
+            
+            return np.array([min_b, max_b])
 
         def _sample_box_points(self, box: np.ndarray) -> np.ndarray:
             """
-            Sample representative points from a box.
-
-            Samples corners, center, and edge midpoints for good coverage.
-
-            Args:
-                box: Array of shape (2, D)
-
-            Returns:
-                Array of shape (n_samples, D) where n_samples = 2^D + 1 + 2D
+            Generate representative points: 2^D corners, center, and 2*D face centers.
             """
             dim = box.shape[1]
-
-            if dim == 2:
-                # 2D case: 4 corners + 1 center + 4 edge midpoints
-                corners = np.array([
-                    [box[0, 0], box[0, 1]],
-                    [box[1, 0], box[0, 1]],
-                    [box[0, 0], box[1, 1]],
-                    [box[1, 0], box[1, 1]]
-                ])
-
-                center = (box[0] + box[1]) / 2.0
-
-                edge_midpoints = np.array([
-                    [center[0], box[0, 1]],
-                    [center[0], box[1, 1]],
-                    [box[0, 0], center[1]],
-                    [box[1, 0], center[1]]
-                ])
-
-                return np.vstack([corners, center.reshape(1, -1), edge_midpoints])
-
-            else:
-                # General D-dimensional case
-                # Generate all corners (2^D points)
-                corner_indices = list(itertools.product([0, 1], repeat=dim))
-                corners = np.array([[box[idx[i], i] for i in range(dim)] for idx in corner_indices])
-
-                # Center point
-                center = (box[0] + box[1]) / 2.0
-
-                # Edge midpoints: vary one coordinate, keep others at center
-                edge_midpoints = []
-                for d in range(dim):
-                    for extreme in [0, 1]:
-                        point = center.copy()
-                        point[d] = box[extreme, d]
-                        edge_midpoints.append(point)
-
-                return np.vstack([corners, center.reshape(1, -1), np.array(edge_midpoints)])
+            
+            # 1. Corners
+            corner_points = list(itertools.product(*zip(box[0], box[1])))
+            
+            # 2. Center
+            center = (box[0] + box[1]) / 2
+            
+            # 3. Face centers (optional but recommended for non-linear maps)
+            # Construct points that are at the center of each face
+            face_centers = []
+            for d in range(dim):
+                p_min = center.copy(); p_min[d] = box[0, d]
+                p_max = center.copy(); p_max[d] = box[1, d]
+                face_centers.extend([p_min, p_max])
+                
+            return np.array(corner_points + [center] + face_centers)
 
 except ImportError:
     # If torch is not installed, create a dummy class

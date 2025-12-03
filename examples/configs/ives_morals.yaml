@@ -40,7 +40,7 @@ domain:
 cmgdb_3d:
   subdiv_min: 33      # Minimum subdivision depth (2^N total boxes)
   subdiv_max: 33      # Maximum subdivision depth (equal to min for uniform grid)
-  subdiv_init: 0      # Initial subdivision depth (0 to start at subdiv_min)
+  subdiv_init: 10      # Initial subdivision depth (0 to start at subdiv_min)
   subdiv_limit: 100000  # Maximum number of boxes to prevent runaway refinement
   padding: false      # Disable boundary padding
 

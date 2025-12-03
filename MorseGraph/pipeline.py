@@ -27,7 +27,6 @@ from MorseGraph.analysis import (
 )
 from MorseGraph.plot import (
     plot_morse_graph_diagram,
-    plot_morse_sets_3d,
     plot_morse_sets_3d_scatter,
     plot_morse_sets_3d_projections,
     plot_morse_sets_3d_with_trajectories,
@@ -188,27 +187,7 @@ class MorseGraphPipeline:
                             os.path.join(plot_output_dir, "01_morse_graph_3d.png"),
                             self.system_name)
 
-        # Plot Morse sets (cuboid visualization - CMGDB style)
-        # Skip cuboid plot if box count is too large (barycenter scatter is much faster)
-        total_boxes = sum(len(morse_graph_data['morse_graph'].morse_set_boxes(i))
-                         for i in range(morse_graph_data['morse_graph'].num_vertices()))
-
-        if total_boxes > 1000:
-            self._log(f"  Skipping 3D cuboid plot ({total_boxes} boxes > 1000 threshold)")
-            self._log("  Using barycenter scatter plot instead (more efficient for dense sets)")
-            cuboid_success = False
-        else:
-            cuboid_success = plot_morse_sets_3d(morse_graph_data['morse_graph'],
-                               self.config.domain_bounds,
-                               os.path.join(plot_output_dir, "02_morse_sets_3d_cuboids.png"),
-                               title=f"{self.system_name} - 3D Morse Sets (Cuboids)",
-                               labels={'x': 'X', 'y': 'Y', 'z': 'Z'},
-                               timeout_seconds=30)
-
-            if not cuboid_success:
-                self._log("  3D cuboid plot skipped due to timeout (too many boxes)")
-
-        # Plot Morse sets (barycenter scatter - always works well for dense sets)
+        # Plot Morse sets (barycenter scatter visualization)
         plot_morse_sets_3d_scatter(morse_graph_data['morse_graph'],
                                    self.config.domain_bounds,
                                    os.path.join(plot_output_dir, "03_morse_sets_3d_scatter.png"),
@@ -298,7 +277,7 @@ class MorseGraphPipeline:
                 output_dir=plot_output_dir,
                 system_name=self.system_name,
                 domain_bounds=self.config.domain_bounds,
-                prefix="03_with_data",
+                prefix="03",
                 n_trajectories=100,
                 use_tail_only=True,
                 tail_fraction=0.5
@@ -341,10 +320,10 @@ class MorseGraphPipeline:
         if encoder is None or force_retrain:
             self._log("  Models not found in cache or retrain forced. Training new models...")
             
-            # Prepare data
-            X_full = torch.tensor(self.trajectory_data['X'], dtype=torch.float32)
-            Y_full = torch.tensor(self.trajectory_data['Y'], dtype=torch.float32)
-            
+            # Prepare data (already float32 from generation)
+            X_full = self.trajectory_data['X']
+            Y_full = self.trajectory_data['Y']
+
             # Split into train and validation (80/20)
             split_idx = int(len(X_full) * 0.8)
             X_train = X_full[:split_idx]

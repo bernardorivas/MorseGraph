@@ -152,7 +152,7 @@ def generate_trajectory_data(
     X = np.concatenate(X, axis=0)
     Y = np.concatenate(Y, axis=0)
 
-    return X, Y, trajectories
+    return X.astype(np.float32), Y.astype(np.float32), trajectories
 
 
 def generate_map_trajectory_data(
@@ -266,14 +266,14 @@ def generate_map_trajectory_data(
     X = np.concatenate([x[np.newaxis, :] for x in X], axis=0) if X else np.array([])
     Y = np.concatenate([y[np.newaxis, :] for y in Y], axis=0) if Y else np.array([])
 
-    return X, Y, trajectories
+    return X.astype(np.float32), Y.astype(np.float32), trajectories
 
 
 # =============================================================================
 # Trajectory Data I/O
 # =============================================================================
 
-def save_trajectory_data(
+def _save_trajectory_data_file(
     filepath: str,
     x_t: np.ndarray,
     x_t_plus_1: np.ndarray,
@@ -291,7 +291,7 @@ def save_trajectory_data(
         metadata: Dictionary of metadata to save
 
     Example:
-        >>> save_trajectory_data(
+        >>> _save_trajectory_data_file(
         ...     'data.npz', X, Y, trajs,
         ...     {'n_trajectories': 100, 'total_time': 10.0}
         ... )
@@ -311,7 +311,7 @@ def save_trajectory_data(
     print(f"  Saved training data to: {filepath}")
 
 
-def load_trajectory_data(filepath: str) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray], Dict[str, Any]]:
+def _load_trajectory_data_file(filepath: str) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray], Dict[str, Any]]:
     """
     Load trajectory data and metadata from disk.
 
@@ -325,7 +325,7 @@ def load_trajectory_data(filepath: str) -> Tuple[np.ndarray, np.ndarray, List[np
         metadata: Dictionary of metadata
 
     Example:
-        >>> X, Y, trajs, meta = load_trajectory_data('data.npz')
+        >>> X, Y, trajs, meta = _load_trajectory_data_file('data.npz')
     """
     data = np.load(filepath)
 
@@ -822,6 +822,10 @@ class ExperimentConfig:
 
     def __init__(
         self,
+        # System info
+        system_type: str = 'map',
+        dynamics_name: str = 'unknown',
+
         # Domain specification
         domain_bounds: List[List[float]] = None,
 
@@ -876,6 +880,7 @@ class ExperimentConfig:
         latent_padding: bool = True,
         latent_bounds_padding: float = 1.01,
         original_grid_subdiv: int = 15,
+        latent_morse_graph_method: Optional[str] = 'data',
 
         # Large sample for domain-restricted computation
         large_sample_size: Optional[int] = None,
@@ -886,41 +891,11 @@ class ExperimentConfig:
     ):
         """
         Initialize experiment configuration.
-
-        Supports two architecture modes:
-        - Simple mode: Use shared hidden_dim and num_layers for all components
-        - Advanced mode: Use component-specific parameters (encoder_hidden_dim, etc.)
-
-        Args:
-            domain_bounds: [[lower_bounds], [upper_bounds]] for 3D domain
-            subdiv_min, subdiv_max, subdiv_init, subdiv_limit: CMGDB subdivision parameters for 3D
-            padding: Whether to use padding in BoxMap computation
-            n_trajectories: Number of trajectories for training data
-            n_points: Points per trajectory
-            skip_initial: Initial iterations to skip
-            random_seed: Random seed for reproducibility
-            input_dim: Input dimension (should be 3)
-            latent_dim: Latent space dimension (typically 2)
-            hidden_dim: Hidden layer dimension (simple mode)
-            num_layers: Number of hidden layers (simple mode)
-            output_activation: Default activation for all networks (deprecated)
-            encoder_activation, decoder_activation, latent_dynamics_activation: Per-network activations
-            encoder_hidden_dim, encoder_num_layers: Encoder-specific architecture (advanced mode)
-            decoder_hidden_dim, decoder_num_layers: Decoder-specific architecture (advanced mode)
-            latent_dynamics_hidden_dim, latent_dynamics_num_layers: Dynamics-specific architecture (advanced mode)
-            num_epochs: Training epochs
-            batch_size: Batch size for training
-            learning_rate: Learning rate
-            early_stopping_patience: Early stopping patience
-            min_delta: Minimum improvement for early stopping
-            w_recon, w_dyn_recon, w_dyn_cons: Loss weights
-            latent_subdiv_min, latent_subdiv_max: CMGDB parameters for 2D latent space
-            latent_padding: Padding for latent BoxMap
-            latent_bounds_padding: Padding factor for latent bounding box
-            original_grid_subdiv: Subdivision for uniform grid in original space (results in 2^(N/3) points per dimension)
-            large_sample_size: Size of large sample for domain-restricted computation
-            target_points_per_box: Target density for large sample estimation
         """
+        # System info
+        self.system_type = system_type
+        self.dynamics_name = dynamics_name
+
         # Domain
         self.domain_bounds = domain_bounds or [[-10, -10, -10], [10, 10, 10]]
 
@@ -975,6 +950,7 @@ class ExperimentConfig:
         self.latent_padding = latent_padding
         self.latent_bounds_padding = latent_bounds_padding
         self.original_grid_subdiv = original_grid_subdiv
+        self.latent_morse_graph_method = latent_morse_graph_method
 
         # Large sample
         self.large_sample_size = large_sample_size
@@ -993,6 +969,8 @@ class ExperimentConfig:
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
         config_dict = {
+            'system_type': self.system_type,
+            'dynamics_name': self.dynamics_name,
             'domain_bounds': self.domain_bounds,
             'subdiv_min': self.subdiv_min,
             'subdiv_max': self.subdiv_max,
@@ -1026,6 +1004,7 @@ class ExperimentConfig:
             'latent_padding': self.latent_padding,
             'latent_bounds_padding': self.latent_bounds_padding,
             'original_grid_subdiv': self.original_grid_subdiv,
+            'latent_morse_graph_method': self.latent_morse_graph_method,
             'large_sample_size': self.large_sample_size,
             'target_points_per_box': self.target_points_per_box,
             'n_grid_points': self.n_grid_points,
@@ -1252,55 +1231,53 @@ def compute_trajectory_hash(config, cmgdb_3d_hash: str) -> str:
     return hash_full[:16]
 
 
-def compute_training_hash(config, cmgdb_3d_hash: str) -> str:
+def compute_training_hash(
+    config_traj: Dict[str, Any],
+    input_dim: int,
+    latent_dim: int,
+    hidden_dim: int,
+    num_layers: int,
+    w_recon: float,
+    w_dyn_recon: float,
+    w_dyn_cons: float,
+    learning_rate: float,
+    batch_size: int,
+    num_epochs: int,
+    early_stopping_patience: int,
+    min_delta: float,
+    encoder_activation: Optional[str],
+    decoder_activation: Optional[str],
+    latent_dynamics_activation: Optional[str]
+) -> str:
     """
     Compute hash for training configuration.
-
-    This hash depends on the 3D CMGDB hash plus all training parameters
-    to enable caching of trained models.
-
-    Args:
-        config: Experiment configuration object
-        cmgdb_3d_hash: Hash of 3D CMGDB computation (dependency)
-
-    Returns:
-        SHA256 hash string (first 16 characters)
     """
     import hashlib
     import json
 
+    # Serialize the trajectory config to get a consistent hash base
+    # We can use the hash of the config if it has one, or just the config itself
+    # Assuming config_traj is a dict
+    config_str = json.dumps(config_traj, sort_keys=True)
+    traj_hash = hashlib.sha256(config_str.encode('utf-8')).hexdigest()[:16]
+
     params = {
-        # Dependency on 3D computation
-        '3d_hash': cmgdb_3d_hash,
-
-        # Training data generation
-        'n_trajectories': config.n_trajectories,
-        'n_points': config.n_points,
-        'skip_initial': config.skip_initial,
-        'random_seed': config.random_seed,
-
-        # Architecture
-        'input_dim': config.input_dim,
-        'latent_dim': config.latent_dim,
-        'hidden_dim': config.hidden_dim,
-        'num_layers': config.num_layers,
-
-        # Activation functions
-        'encoder_activation': str(config.encoder_activation),
-        'decoder_activation': str(config.decoder_activation),
-        'latent_dynamics_activation': str(config.latent_dynamics_activation),
-
-        # Training hyperparameters
-        'num_epochs': config.num_epochs,
-        'batch_size': config.batch_size,
-        'learning_rate': config.learning_rate,
-        'early_stopping_patience': config.early_stopping_patience,
-        'min_delta': config.min_delta,
-
-        # Loss weights
-        'w_recon': config.w_recon,
-        'w_dyn_recon': config.w_dyn_recon,
-        'w_dyn_cons': config.w_dyn_cons,
+        'traj_config_hash': traj_hash,
+        'input_dim': input_dim,
+        'latent_dim': latent_dim,
+        'hidden_dim': hidden_dim,
+        'num_layers': num_layers,
+        'w_recon': w_recon,
+        'w_dyn_recon': w_dyn_recon,
+        'w_dyn_cons': w_dyn_cons,
+        'learning_rate': learning_rate,
+        'batch_size': batch_size,
+        'num_epochs': num_epochs,
+        'early_stopping_patience': early_stopping_patience,
+        'min_delta': min_delta,
+        'encoder_activation': str(encoder_activation),
+        'decoder_activation': str(decoder_activation),
+        'latent_dynamics_activation': str(latent_dynamics_activation)
     }
 
     # Create sorted JSON string for consistent hashing
@@ -1313,37 +1290,37 @@ def compute_training_hash(config, cmgdb_3d_hash: str) -> str:
     return hash_full[:16]
 
 
-def compute_cmgdb_2d_hash(config, training_hash: str) -> str:
+def compute_cmgdb_2d_hash(
+    config_train: Dict[str, Any],
+    method: str,
+    subdiv_min: int,
+    subdiv_max: int,
+    subdiv_init: int,
+    subdiv_limit: int,
+    padding: bool,
+    original_grid_subdiv: int,
+    latent_bounds: List[List[float]]
+) -> str:
     """
     Compute hash for 2D CMGDB configuration.
-
-    This hash depends on the training hash plus all 2D CMGDB parameters
-    to enable caching of 2D Morse graph computations.
-
-    Args:
-        config: Experiment configuration object
-        training_hash: Hash of training computation (dependency)
-
-    Returns:
-        SHA256 hash string (first 16 characters)
     """
     import hashlib
     import json
 
+    # Serialize the training config
+    config_str = json.dumps(config_train, sort_keys=True)
+    train_hash = hashlib.sha256(config_str.encode('utf-8')).hexdigest()[:16]
+
     params = {
-        # Dependency on training
-        'training_hash': training_hash,
-
-        # 2D CMGDB parameters
-        'subdiv_min': config.latent_subdiv_min,
-        'subdiv_max': config.latent_subdiv_max,
-        'subdiv_init': config.latent_subdiv_init,
-        'subdiv_limit': config.latent_subdiv_limit,
-        'padding': config.padding,
-        'latent_bounds_padding': config.latent_bounds_padding,
-
-        # Encoding grid resolution
-        'original_grid_subdiv': config.original_grid_subdiv,
+        'training_config_hash': train_hash,
+        'method': method,
+        'subdiv_min': subdiv_min,
+        'subdiv_max': subdiv_max,
+        'subdiv_init': subdiv_init,
+        'subdiv_limit': subdiv_limit,
+        'padding': padding,
+        'original_grid_subdiv': original_grid_subdiv,
+        'latent_bounds': latent_bounds
     }
 
     # Create sorted JSON string for consistent hashing
@@ -1679,14 +1656,13 @@ def load_or_compute_2d_morse_graphs(
     decoder,
     latent_dynamics,
     latent_bounds: np.ndarray,
-    map_func: Callable,
     output_dir: str = 'examples/ives_model_output',
     force_recompute: bool = False
 ) -> Tuple[Dict, bool]:
     """
     Load cached 2D Morse graph or compute new one if cache doesn't exist.
 
-    Computes the 2D Morse graph in latent space using BoxMapData restricted to E(X).
+    Computes the 2D Morse graph in latent space using the method specified in config.
 
     Args:
         config: Configuration object with 2D CMGDB parameters
@@ -1695,7 +1671,6 @@ def load_or_compute_2d_morse_graphs(
         decoder: Trained decoder model
         latent_dynamics: Trained latent dynamics model
         latent_bounds: Bounds of latent space [2, 2] array
-        map_func: Original map function for reference
         output_dir: Base output directory
         force_recompute: If True, ignore cache and recompute
 
@@ -1706,6 +1681,7 @@ def load_or_compute_2d_morse_graphs(
                 - 'barycenters': Barycenters of Morse sets
                 - 'config': Configuration used
                 - 'metadata': Metadata dict
+                - 'method': The method used for computation
             - was_cached: True if loaded from cache, False if newly computed
     """
     import os
@@ -1739,77 +1715,131 @@ def load_or_compute_2d_morse_graphs(
         morse_graph = CachedMorseGraph(morse_graph_nx)
 
         # Load barycenters - reconstruct dict from npz format
-        barycenters_data = np.load(barycenters_path)
         barycenters = {}
-        for key in barycenters_data.files:
-            if key.startswith('morse_set_'):
-                morse_set_id = int(key.split('_')[-1])
-                barycenters[morse_set_id] = barycenters_data[key]
+        for key in metadata['barycenters_keys']: # Use keys from metadata
+            barycenters[int(key.split('_')[-1])] = np.array(metadata[key])
 
         morse_2d_result = {
             'morse_graph': morse_graph,
             'barycenters': barycenters,
             'config': config,
-            'metadata': metadata
+            'metadata': metadata,
+            'method': metadata['method']
         }
 
         return morse_2d_result, True
 
     else:
-        # Compute new 2D Morse graph using BoxMapData
-        print(f"Computing 2D Morse graph (hash: {cmgdb_2d_hash})")
+        # Compute new 2D Morse graph
+        method = config.latent_morse_graph_method
+        print(f"Computing 2D Morse graph (hash: {cmgdb_2d_hash}) using method: {method}")
 
-        from MorseGraph.core import compute_morse_graph_2d_data
+        from MorseGraph.core import compute_morse_graph_2d_data, compute_morse_graph_2d_restricted, compute_morse_graph_2d_latent_enclosure
         import torch
         import networkx as nx
         import pickle
 
         # Get device from encoder
         device = next(encoder.parameters()).device
-
-        # Generate dense uniform grid in original space for encoding
-        print("\nGenerating dense uniform grid in original space...")
-        original_grid_subdiv = config.original_grid_subdiv
-        n_per_dim = 2 ** (original_grid_subdiv // 3)
-        print(f"  Grid: {n_per_dim} points per dimension ({n_per_dim**3} total)")
-
-        # Create meshgrid for 3D space
-        from MorseGraph.config import load_experiment_config
-        # Get domain bounds from config
-        if hasattr(config, 'domain_bounds'):
-            domain_bounds = config.domain_bounds
-        else:
-            raise ValueError("Config must have domain_bounds")
-
-        grid_1d = [np.linspace(domain_bounds[0][i], domain_bounds[1][i], n_per_dim)
-                   for i in range(3)]
-        mesh = np.meshgrid(*grid_1d, indexing='ij')
-        X_large_grid = np.stack([m.flatten() for m in mesh], axis=1)
-        print(f"  Generated {len(X_large_grid)} grid points in original space")
-
-        # Encode grid to latent space
-        with torch.no_grad():
-            z_large_grid = encoder(torch.FloatTensor(X_large_grid).to(device)).cpu().numpy()
-        print(f"  Encoded to latent space: {z_large_grid.shape}")
-
-        # Compute Morse graph using BoxMapData
-        print(f"\nComputing Morse graph using BoxMapData (padding={config.latent_padding})...")
-        result_2d = compute_morse_graph_2d_data(
-            latent_dynamics, device, z_large_grid, latent_bounds.tolist(),
-            subdiv_min=config.latent_subdiv_min, subdiv_max=config.latent_subdiv_max,
-            subdiv_init=config.latent_subdiv_init, subdiv_limit=config.latent_subdiv_limit,
-            padding=config.latent_padding,
-            cache_dir=None,  # Don't use internal cache
-            use_cache=False,
-            verbose=True
-        )
-        morse_graph_cmgdb = result_2d['morse_graph']
         
-        # Extract barycenters
+        morse_graph_cmgdb = None
         barycenters = {}
-        for i in range(morse_graph_cmgdb.num_vertices()):
-            boxes = morse_graph_cmgdb.morse_set_boxes(i)
-            barycenters[i] = [np.array([(box[j] + box[j + 2]) / 2.0 for j in range(2)]) for box in boxes] if boxes else []
+        
+        if method == 'data':
+            # Generate dense uniform grid in original space for encoding
+            print("\nGenerating dense uniform grid in original space...")
+            original_grid_subdiv = config.original_grid_subdiv
+            input_dim = config.input_dim
+            n_per_dim = 2 ** (original_grid_subdiv // input_dim) # Adjust N for higher dimensions
+            print(f"  Grid: {n_per_dim} points per dimension ({n_per_dim**input_dim} total)")
+
+            # Create meshgrid for 3D space
+            domain_bounds = config.domain_bounds
+            grid_1d = [np.linspace(domain_bounds[0][i], domain_bounds[1][i], n_per_dim)
+                       for i in range(input_dim)]
+            
+            # Dynamically create meshgrid based on input_dim
+            if input_dim == 3:
+                mesh = np.meshgrid(*grid_1d, indexing='ij')
+            elif input_dim == 2:
+                mesh = np.meshgrid(*grid_1d, indexing='ij')
+            elif input_dim == 1:
+                mesh = np.meshgrid(*grid_1d, indexing='ij')
+            else:
+                # Handle cases for other input dimensions as needed
+                mesh = np.meshgrid(*grid_1d, indexing='ij') # Default to ij for consistency
+
+
+            X_large_grid = np.stack([m.flatten() for m in mesh], axis=1)
+            print(f"  Generated {len(X_large_grid)} grid points in original space")
+
+            # Encode grid to latent space
+            with torch.no_grad():
+                z_large_grid = encoder(torch.FloatTensor(X_large_grid).to(device)).cpu().numpy()
+            print(f"  Encoded to latent space: {z_large_grid.shape}")
+
+            # Compute Morse graph using BoxMapData
+            print(f"\nComputing Morse graph using BoxMapData (padding={config.latent_padding})...")
+            result_2d = compute_morse_graph_2d_data(
+                latent_dynamics, device, z_large_grid, latent_bounds.tolist(),
+                subdiv_min=config.latent_subdiv_min, subdiv_max=config.latent_subdiv_max,
+                subdiv_init=config.latent_subdiv_init, subdiv_limit=config.latent_subdiv_limit,
+                padding=config.latent_padding,
+                cache_dir=None,  # Don't use internal cache
+                use_cache=False,
+                verbose=True
+            )
+            morse_graph_cmgdb = result_2d['morse_graph']
+            # Extract barycenters
+            for i in range(morse_graph_cmgdb.num_vertices()):
+                boxes = morse_graph_cmgdb.morse_set_boxes(i)
+                barycenters[i] = [np.array([(box[j] + box[j + 2]) / 2.0 for j in range(2)]) for box in boxes] if boxes else []
+
+
+        elif method == 'restricted':
+            print(f"\nComputing Morse graph using restricted method (padding={config.latent_padding})...")
+            # For 'restricted' method, we need the raw z_data from training
+            # Assuming training_data from earlier stages is available or passed.
+            # For now, let's just use the latent data from a previous stage as z_data.
+            # In a full pipeline, this z_data might come from the training result.
+            z_data_for_restricted = encoder(torch.FloatTensor(config.trajectory_data['X']).to(device)).detach().cpu().numpy()
+
+            result_2d = compute_morse_graph_2d_restricted(
+                latent_dynamics, device, z_data_for_restricted, latent_bounds.tolist(),
+                subdiv_min=config.latent_subdiv_min, subdiv_max=config.latent_subdiv_max,
+                subdiv_init=config.latent_subdiv_init, subdiv_limit=config.latent_subdiv_limit,
+                include_neighbors=True, # This should be configurable
+                padding=config.latent_padding,
+                cache_dir=None,
+                use_cache=False,
+                verbose=True
+            )
+            morse_graph_cmgdb = result_2d['morse_graph']
+            # Extract barycenters
+            for i in range(morse_graph_cmgdb.num_vertices()):
+                boxes = morse_graph_cmgdb.morse_set_boxes(i)
+                barycenters[i] = [np.array([(box[j] + box[j + 2]) / 2.0 for j in range(2)]) for box in boxes] if boxes else []
+
+
+        elif method == 'latent_enclosure':
+            print(f"\nComputing Morse graph using latent enclosure method (padding={config.latent_padding})...")
+            result_2d = compute_morse_graph_2d_latent_enclosure(
+                latent_dynamics, device, latent_bounds.tolist(),
+                subdiv_min=config.latent_subdiv_min, subdiv_max=config.latent_subdiv_max,
+                subdiv_init=config.latent_subdiv_init, subdiv_limit=config.latent_subdiv_limit,
+                padding=config.latent_padding,
+                cache_dir=None,
+                use_cache=False,
+                verbose=True
+            )
+            morse_graph_cmgdb = result_2d['morse_graph']
+            # Extract barycenters
+            for i in range(morse_graph_cmgdb.num_vertices()):
+                boxes = morse_graph_cmgdb.morse_set_boxes(i)
+                barycenters[i] = [np.array([(box[j] + box[j + 2]) / 2.0 for j in range(2)]) for box in boxes] if boxes else []
+                
+        else:
+            raise ValueError(f"Unknown 2D Morse graph computation method: {method}")
 
         # Convert to NetworkX for caching
         nx_graph = nx.DiGraph()
@@ -1824,8 +1854,10 @@ def load_or_compute_2d_morse_graphs(
         os.makedirs(cache_dir, exist_ok=True)
         with open(morse_graph_path, 'wb') as f:
             pickle.dump(nx_graph, f)
-        np.savez(barycenters_path, **{f'morse_set_{k}': v for k, v in barycenters.items()})
-
+        
+        # Save barycenters (convert to list of lists for JSON serializability in metadata)
+        barycenters_serializable = {f'morse_set_{k}': [arr.tolist() for arr in v] for k, v in barycenters.items()}
+        
         # Save metadata
         metadata = {
             'cmgdb_2d_hash': cmgdb_2d_hash,
@@ -1838,9 +1870,11 @@ def load_or_compute_2d_morse_graphs(
                 'padding': config.latent_padding,
                 'bounds_padding': config.latent_bounds_padding,
                 'original_grid_subdiv': config.original_grid_subdiv,
+                'method': method # Save the method used
             },
             'num_morse_sets': nx_graph.number_of_nodes(),
             'num_edges': nx_graph.number_of_edges(),
+            **barycenters_serializable # Include barycenters as part of metadata
         }
 
         with open(metadata_path, 'w') as f:
@@ -1852,7 +1886,8 @@ def load_or_compute_2d_morse_graphs(
             'morse_graph': CachedMorseGraph(nx_graph),
             'barycenters': barycenters,
             'config': config,
-            'metadata': metadata
+            'metadata': metadata,
+            'method': method
         }
 
         return morse_2d_result, False
@@ -1936,6 +1971,463 @@ class CachedMorseGraph:
     def edges(self) -> list:
         """Return list of edges as (source, target) tuples."""
         return list(self._graph.edges())
+
+# =============================================================================
+# Pipeline Utilities (New)
+# =============================================================================
+
+def compute_cmgdb_3d_hash(
+    dynamics_name: str,
+    domain_bounds: List[List[float]],
+    subdiv_min: int,
+    subdiv_max: int,
+    subdiv_init: int,
+    subdiv_limit: int,
+    padding: bool,
+    system_parameters: Dict[str, Any]
+) -> str:
+    """Compute unique hash for 3D CMGDB computation."""
+    import hashlib
+    import json
+    
+    params = {
+        'dynamics_name': dynamics_name,
+        'domain_bounds': domain_bounds,
+        'subdiv_min': subdiv_min,
+        'subdiv_max': subdiv_max,
+        'subdiv_init': subdiv_init,
+        'subdiv_limit': subdiv_limit,
+        'padding': padding,
+        'system_parameters': system_parameters
+    }
+    
+    params_str = json.dumps(params, sort_keys=True)
+    hash_obj = hashlib.sha256(params_str.encode('utf-8'))
+    return hash_obj.hexdigest()[:16]
+
+
+def compute_trajectory_data_hash(
+    config_3d: Dict[str, Any],
+    n_trajectories: int,
+    n_points: int,
+    skip_initial: int,
+    random_seed: int
+) -> str:
+    """Compute unique hash for trajectory data."""
+    import hashlib
+    import json
+    
+    # Hash of the config used for 3D computation (which includes dynamics info)
+    # We use this as a base to ensure trajectories correspond to the same system
+    config_str = json.dumps(config_3d, sort_keys=True)
+    config_hash = hashlib.sha256(config_str.encode('utf-8')).hexdigest()[:16]
+    
+    params = {
+        'base_config_hash': config_hash,
+        'n_trajectories': n_trajectories,
+        'n_points': n_points,
+        'skip_initial': skip_initial,
+        'random_seed': random_seed
+    }
+    
+    params_str = json.dumps(params, sort_keys=True)
+    hash_obj = hashlib.sha256(params_str.encode('utf-8'))
+    return hash_obj.hexdigest()[:16]
+
+
+def save_morse_graph_data(directory: str, data: Dict[str, Any]) -> None:
+    """Save Morse graph data (graph, sets, barycenters, config) to directory."""
+    import pickle
+    import json
+    import os
+    import networkx as nx
+    
+    os.makedirs(directory, exist_ok=True)
+    
+    morse_graph = data['morse_graph']
+    
+    # Save graph (convert to NetworkX if CMGDB object)
+    with open(os.path.join(directory, 'morse_graph.pkl'), 'wb') as f:
+        if hasattr(morse_graph, 'num_vertices') and not isinstance(morse_graph, CachedMorseGraph):
+            # Convert CMGDB to NetworkX
+            nx_graph = nx.DiGraph()
+            for v in range(morse_graph.num_vertices()):
+                # Store box info if available
+                # CMGDB might expose morse_set_boxes
+                if hasattr(morse_graph, 'morse_set_boxes'):
+                    try:
+                        boxes = morse_graph.morse_set_boxes(v)
+                        # boxes is likely a list of list/array
+                        nx_graph.add_node(v, morse_set_boxes=[list(b) for b in boxes] if boxes else [])
+                    except Exception:
+                        nx_graph.add_node(v)
+                else:
+                    nx_graph.add_node(v)
+                    
+            for v in range(morse_graph.num_vertices()):
+                for target in morse_graph.adjacencies(v):
+                    nx_graph.add_edge(v, target)
+            pickle.dump(nx_graph, f)
+        elif isinstance(morse_graph, CachedMorseGraph):
+             pickle.dump(morse_graph.graph, f)
+        else:
+            # Assume already NetworkX or picklable
+            pickle.dump(morse_graph, f)
+        
+    if 'morse_sets' in data and data['morse_sets'] is not None:
+        with open(os.path.join(directory, 'morse_sets.pkl'), 'wb') as f:
+            pickle.dump(data['morse_sets'], f)
+            
+    # Save barycenters (JSON friendly if possible, or npz)
+    barycenters_serializable = {}
+    if 'morse_set_barycenters' in data and data['morse_set_barycenters'] is not None:
+        for k, v in data['morse_set_barycenters'].items():
+            barycenters_serializable[str(k)] = [arr.tolist() for arr in v]
+    
+    with open(os.path.join(directory, 'barycenters.json'), 'w') as f:
+        json.dump(barycenters_serializable, f, indent=2)
+        
+    # Save config
+    if 'config' in data:
+        with open(os.path.join(directory, 'config.json'), 'w') as f:
+            json.dump(data['config'], f, indent=2)
+            
+    # Save metadata/method if present
+    if 'method' in data:
+        with open(os.path.join(directory, 'metadata.json'), 'w') as f:
+            json.dump({'method': data['method']}, f, indent=2)
+
+
+def load_morse_graph_data(directory: str) -> Optional[Dict[str, Any]]:
+    """Load Morse graph data from directory."""
+    import pickle
+    import json
+    import os
+    import networkx as nx
+    
+    if not os.path.exists(os.path.join(directory, 'morse_graph.pkl')):
+        return None
+        
+    try:
+        with open(os.path.join(directory, 'morse_graph.pkl'), 'rb') as f:
+            morse_graph_obj = pickle.load(f)
+            
+        # Wrap in CachedMorseGraph if it's NetworkX
+        if isinstance(morse_graph_obj, nx.DiGraph):
+            morse_graph = CachedMorseGraph(morse_graph_obj)
+        else:
+            morse_graph = morse_graph_obj
+            
+        morse_sets = None
+        if os.path.exists(os.path.join(directory, 'morse_sets.pkl')):
+            with open(os.path.join(directory, 'morse_sets.pkl'), 'rb') as f:
+                morse_sets = pickle.load(f)
+                
+        morse_set_barycenters = {}
+        if os.path.exists(os.path.join(directory, 'barycenters.json')):
+            with open(os.path.join(directory, 'barycenters.json'), 'r') as f:
+                bary_json = json.load(f)
+                for k, v in bary_json.items():
+                    morse_set_barycenters[int(k)] = [np.array(arr) for arr in v]
+                    
+        config = None
+        if os.path.exists(os.path.join(directory, 'config.json')):
+            with open(os.path.join(directory, 'config.json'), 'r') as f:
+                config = json.load(f)
+                
+        method = None
+        if os.path.exists(os.path.join(directory, 'metadata.json')):
+            with open(os.path.join(directory, 'metadata.json'), 'r') as f:
+                meta = json.load(f)
+                method = meta.get('method')
+                
+        return {
+            'morse_graph': morse_graph,
+            'morse_sets': morse_sets,
+            'morse_set_barycenters': morse_set_barycenters,
+            'config': config,
+            'method': method
+        }
+    except Exception as e:
+        print(f"Error loading cache from {directory}: {e}")
+        return None
+
+
+def save_trajectory_data(directory: str, data: Dict[str, Any]) -> None:
+    """Save trajectory data dict to directory."""
+    import os
+    import json
+    
+    os.makedirs(directory, exist_ok=True)
+    
+    np.savez_compressed(os.path.join(directory, 'data.npz'), X=data['X'], Y=data['Y'])
+    
+    if 'config' in data:
+        with open(os.path.join(directory, 'config.json'), 'w') as f:
+            json.dump(data['config'], f, indent=2)
+
+
+def load_trajectory_data(directory: str) -> Optional[Dict[str, Any]]:
+    """
+    Load trajectory data from directory (preferred) or file (legacy).
+    Returns dict with keys 'X', 'Y', 'config'.
+    """
+    import os
+    import json
+    
+    # If passed a file path, use legacy loader
+    if os.path.isfile(directory):
+        try:
+            X, Y, _, meta = _load_trajectory_data_file(directory)
+            return {'X': X, 'Y': Y, 'config': meta}
+        except Exception:
+            return None
+
+    # Directory loading
+    if not os.path.exists(os.path.join(directory, 'data.npz')):
+        return None
+        
+    try:
+        data = np.load(os.path.join(directory, 'data.npz'))
+        X = data['X']
+        Y = data['Y']
+        
+        config = None
+        if os.path.exists(os.path.join(directory, 'config.json')):
+            with open(os.path.join(directory, 'config.json'), 'r') as f:
+                config = json.load(f)
+                
+        return {'X': X, 'Y': Y, 'config': config}
+    except Exception as e:
+        print(f"Error loading trajectory data from {directory}: {e}")
+        return None
+
+
+def save_models(directory: str, encoder, decoder, latent_dynamics, config: Optional[Dict] = None) -> None:
+    """Save PyTorch models and optional config."""
+    import torch
+    import os
+    import json
+    
+    os.makedirs(directory, exist_ok=True)
+    torch.save(encoder.state_dict(), os.path.join(directory, 'encoder.pt'))
+    torch.save(decoder.state_dict(), os.path.join(directory, 'decoder.pt'))
+    torch.save(latent_dynamics.state_dict(), os.path.join(directory, 'latent_dynamics.pt'))
+    
+    if config is not None:
+        # Construct model args from config for reconstruction
+        model_config = {
+            'encoder_args': {
+                'input_dim': config.get('input_dim'),
+                'latent_dim': config.get('latent_dim'),
+                'hidden_dim': config.get('hidden_dim'),
+                'num_layers': config.get('num_layers'),
+                'output_activation': config.get('encoder_activation')
+            },
+            'decoder_args': {
+                'latent_dim': config.get('latent_dim'),
+                'output_dim': config.get('input_dim'),
+                'hidden_dim': config.get('hidden_dim'),
+                'num_layers': config.get('num_layers'),
+                'output_activation': config.get('decoder_activation')
+            },
+            'dynamics_args': {
+                'latent_dim': config.get('latent_dim'),
+                'hidden_dim': config.get('hidden_dim'),
+                'num_layers': config.get('num_layers'),
+                'output_activation': config.get('latent_dynamics_activation')
+            }
+        }
+        # Handle advanced mode if present in config (omitted for brevity, assuming simple mode for now or keys match)
+        # Ideally, ExperimentConfig.to_dict() preserves all.
+        
+        with open(os.path.join(directory, 'model_config.json'), 'w') as f:
+            json.dump(model_config, f, indent=2)
+
+
+def load_models(directory: str) -> Tuple[Any, Any, Any]:
+    """Load PyTorch models. Returns (None, None, None) if not found."""
+    import json
+    import torch
+    import os
+    from MorseGraph.models import Encoder, Decoder, LatentDynamics
+    
+    if not (os.path.exists(os.path.join(directory, 'encoder.pt')) and
+            os.path.exists(os.path.join(directory, 'decoder.pt')) and
+            os.path.exists(os.path.join(directory, 'latent_dynamics.pt')) and
+            os.path.exists(os.path.join(directory, 'training_history.json'))): # Check config/history to reconstruct
+        return None, None, None
+        
+    # Load config to reconstruct models
+    # Assuming config is in history or separate file. 
+    # pipeline.py saves history separately.
+    # Models need dims.
+    # We should save model config.
+    
+    # Try to load config from a file if saved, otherwise rely on user to know?
+    # pipeline.py passes config to train, but load_models needs to know dimensions to instantiate.
+    
+    # Let's assume a 'model_config.json' is saved or we extract from training history
+    
+    try:
+        # Look for training history which contains config params usually
+        with open(os.path.join(directory, 'training_history.json'), 'r') as f:
+            history_data = json.load(f)
+            
+        # Hack: assume pipeline saves config inside history or we saved it separately?
+        # pipeline.py: save_training_history(training_cache_dir, history)
+        # It doesn't seem to save model config explicitly in save_models.
+        # But training_hash includes dimensions.
+        
+        # Ideally we save a 'model_config.json'.
+        # For now, let's check if we can load without it? No.
+        # We need input_dim, latent_dim etc.
+        
+        # Let's look if 'config.json' exists (saved by pipeline maybe?)
+        # pipeline doesn't call save_config there.
+        
+        # NOTE: This is a weakness. I'll make save_training_history include config if possible,
+        # or pipeline should save it.
+        # In pipeline.py: save_models, then save_training_history.
+        
+        # Let's assume for now we can't load without config.
+        # But wait, pipeline.py calls load_models(training_cache_dir).
+        # It doesn't pass config.
+        
+        # I will implement save_models to also save a 'model_config.json' if passed? 
+        # Or save_models in utils doesn't take config.
+        
+        # Correct approach: save_models should take config or dimensions.
+        # But signature in pipeline is `save_models(training_cache_dir, encoder, decoder, latent_dynamics)`.
+        # So I should extract dims from models themselves!
+        
+        encoder_state = torch.load(os.path.join(directory, 'encoder.pt'))
+        # Infer dims from state dict shapes
+        # input_dim: weight of first layer
+        # latent_dim: weight of last layer (mu)
+        
+        # This is brittle.
+        
+        # Alternative: pipeline.py could save config.
+        
+        # For now, I will define load_models to return None if it can't instantiate.
+        # But how to instantiate?
+        
+        # Check if 'model_config.json' exists.
+        if os.path.exists(os.path.join(directory, 'model_config.json')):
+             with open(os.path.join(directory, 'model_config.json'), 'r') as f:
+                mc = json.load(f)
+        else:
+            # Fallback: try to infer or fail
+            # Since I am writing this, I can enforce save_models to save config if I could change pipeline.
+            # But I don't want to change pipeline call signature if possible.
+            # pipeline: `save_models(training_cache_dir, encoder, decoder, latent_dynamics)`
+            
+            # I will inspect the models to get attributes if they are stored.
+            # PyTorch models don't store init args by default.
+            
+            # I will update pipeline.py to save model config!
+            # Or `save_models` in utils can extract it if I modify models to store it.
+            
+            return None, None, None
+
+        encoder = Encoder(**mc['encoder_args'])
+        decoder = Decoder(**mc['decoder_args'])
+        latent_dynamics = LatentDynamics(**mc['dynamics_args'])
+        
+        encoder.load_state_dict(encoder_state)
+        decoder.load_state_dict(torch.load(os.path.join(directory, 'decoder.pt')))
+        latent_dynamics.load_state_dict(torch.load(os.path.join(directory, 'latent_dynamics.pt')))
+        
+        return encoder, decoder, latent_dynamics
+        
+    except Exception as e:
+        print(f"Error loading models: {e}")
+        return None, None, None
+
+
+def save_training_history(directory: str, history: Dict) -> None:
+    """Save training history."""
+    import json
+    import os
+    os.makedirs(directory, exist_ok=True)
+    with open(os.path.join(directory, 'training_history.json'), 'w') as f:
+        json.dump(history, f, indent=2)
+
+
+def load_training_history(directory: str) -> Optional[Dict]:
+    """Load training history."""
+    import json
+    import os
+    path = os.path.join(directory, 'training_history.json')
+    if os.path.exists(path):
+        with open(path, 'r') as f:
+            return json.load(f)
+    return None
+
+
+def compute_latent_bounds_from_data(z_data: np.ndarray, padding: float = 1.1) -> List[List[float]]:
+    """Compute padded bounds for latent data."""
+    mins = z_data.min(axis=0)
+    maxs = z_data.max(axis=0)
+    
+    ranges = maxs - mins
+    centers = (maxs + mins) / 2
+    
+    padded_ranges = ranges * padding
+    
+    padded_mins = centers - padded_ranges / 2
+    padded_maxs = centers + padded_ranges / 2
+    
+    return [padded_mins.tolist(), padded_maxs.tolist()]
+
+
+def generate_3d_grid_for_encoding(bounds: List[List[float]], subdiv: int, input_dim: int) -> np.ndarray:
+    """Generate a dense grid in original space."""
+    # Approx points per dim
+    n_per_dim = int(2**(subdiv / input_dim))
+    
+    grid_1d = [np.linspace(bounds[0][i], bounds[1][i], n_per_dim) for i in range(input_dim)]
+    mesh = np.meshgrid(*grid_1d, indexing='ij')
+    
+    X_grid = np.stack([m.flatten() for m in mesh], axis=1)
+    return X_grid
+
+
+def generate_random_trajectories_3d(
+    dynamics_func: Callable,
+    domain_bounds: np.ndarray,
+    n_trajectories: int,
+    n_points: int,
+    skip_initial: int,
+    random_seed: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate random trajectories for 3D map.
+    Returns X, Y arrays.
+    """
+    np.random.seed(random_seed)
+    
+    # Sample initial conditions
+    ics = np.random.uniform(domain_bounds[0], domain_bounds[1], (n_trajectories, domain_bounds.shape[1]))
+    
+    X = []
+    Y = []
+    
+    for ic in ics:
+        curr = ic
+        # Skip
+        for _ in range(skip_initial):
+            curr = dynamics_func(curr)
+            
+        # Collect
+        for _ in range(n_points):
+            next_val = dynamics_func(curr)
+            X.append(curr)
+            Y.append(next_val)
+            curr = next_val
+            
+    return np.array(X), np.array(Y)
 
 
 def save_morse_graph_cache(

@@ -40,14 +40,14 @@ domain:
 cmgdb_3d:
   subdiv_min: 30          # Minimum subdivision depth
   subdiv_max: 33          # Maximum subdivision depth
-  subdiv_init: 0          # Initial subdivision depth
-  subdiv_limit: 10000     # Maximum number of boxes during refinement
+  subdiv_init: 12          # Initial subdivision depth
+  subdiv_limit: 100000     # Maximum number of boxes during refinement
   padding: false          # Boundary padding enabled
 
 # 2D grid parameters (latent space)
 cmgdb_2d:
   subdiv_min: 20          # Minimum subdivision depth
-  subdiv_max: 20          # Maximum subdivision depth
+  subdiv_max: 28          # Maximum subdivision depth
   subdiv_init: 0          # Initial subdivision depth
   subdiv_limit: 100000    # Maximum number of boxes during refinement
   padding: true           # Boundary padding enabled
@@ -61,10 +61,10 @@ training:
   n_points: 20            # Points per trajectory
   skip_initial: 0         # Initial transient points to skip
   random_seed: 42         # Reproducibility seed
-  num_epochs: 1500        # Maximum training epochs
+  num_epochs: 10000        # Maximum training epochs
   batch_size: 1024        # Training batch size
   learning_rate: 0.001    # Optimizer learning rate
-  early_stopping_patience: 50   # Epochs without improvement before stopping
+  early_stopping_patience: 500   # Epochs without improvement before stopping
   min_delta: 1.0e-5       # Minimum loss improvement threshold
 
 # Neural network architecture
@@ -73,13 +73,13 @@ model:
   latent_dim: 2           # Latent space dimension
   hidden_dim: 32          # Hidden layer dimension
   num_layers: 3           # Number of hidden layers
-  encoder_activation: null      # Encoder activation function
-  decoder_activation: null      # Decoder activation function
-  latent_dynamics_activation: null  # Latent dynamics activation function
+  encoder_activation: tanh      # Encoder activation function
+  decoder_activation: sigmoid      # Decoder activation function
+  latent_dynamics_activation: tanh  # Latent dynamics activation function
 
 # Loss function weights
 loss_weights:
-  w_recon: 500.0          # Reconstruction loss weight
+  w_recon: 100.0          # Reconstruction loss weight
   w_dyn_recon: 1.0        # Dynamics reconstruction loss weight
   w_dyn_cons: 1.0         # Dynamics consistency loss weight
 

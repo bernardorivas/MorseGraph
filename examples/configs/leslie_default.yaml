@@ -46,10 +46,10 @@ training:
   n_points: 20            # Points per trajectory
   skip_initial: 0         # Initial transient points to skip
   random_seed: 42         # Reproducibility seed
-  num_epochs: 1500        # Maximum training epochs
+  num_epochs: 10000        # Maximum training epochs
   batch_size: 1024        # Training batch size
   learning_rate: 0.001    # Optimizer learning rate
-  early_stopping_patience: 50   # Epochs without improvement before stopping
+  early_stopping_patience: 500   # Epochs without improvement before stopping
   min_delta: 1.0e-5       # Minimum loss improvement threshold
 
 # Neural network architecture

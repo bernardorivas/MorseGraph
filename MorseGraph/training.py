@@ -193,27 +193,45 @@ def needs_normalization(config):
     return False
 
 
-def compute_normalization_params(data, method='minmax'):
+def compute_normalization_params(data, method='standard'):
     """
     Compute normalization parameters from training data.
 
+    Supports multiple normalization methods:
+    - 'standard': z-score normalization (mean=0, std=1)
+    - 'minmax': min-max normalization to [-1, 1]
+    - 'minmax_01': min-max normalization to [0, 1]
+
     Args:
         data: Training data array of shape (N, D)
-        method: 'minmax' for [-1, 1] scaling, 'minmax_01' for [0, 1] scaling
+        method: Normalization method ('standard', 'minmax', or 'minmax_01')
 
     Returns:
-        dict: Normalization parameters
+        dict: Normalization parameters with 'method' and relevant statistics
 
     Example:
         >>> import numpy as np
         >>> data = np.random.randn(1000, 3)
-        >>> params = compute_normalization_params(data, method='minmax')
+        >>> params = compute_normalization_params(data, method='standard')
     """
     import numpy as np
 
-    if method == 'minmax':
+    if method == 'standard':
+        data_mean = np.mean(data, axis=0)
+        data_std = np.std(data, axis=0)
+        # Prevent division by zero for constant features
+        data_std[data_std == 0] = 1.0
+
+        return {
+            'method': 'standard',
+            'mean': data_mean.tolist(),
+            'std': data_std.tolist()
+        }
+    elif method == 'minmax':
+        # Scale to [-1, 1]
         data_min = np.min(data, axis=0)
         data_max = np.max(data, axis=0)
+        # Prevent division by zero for constant features
         data_range = data_max - data_min
         data_range[data_range == 0] = 1.0
 
@@ -224,8 +242,10 @@ def compute_normalization_params(data, method='minmax'):
             'range': data_range.tolist()
         }
     elif method == 'minmax_01':
+        # Scale to [0, 1]
         data_min = np.min(data, axis=0)
         data_max = np.max(data, axis=0)
+        # Prevent division by zero for constant features
         data_range = data_max - data_min
         data_range[data_range == 0] = 1.0
 
@@ -236,18 +256,38 @@ def compute_normalization_params(data, method='minmax'):
             'range': data_range.tolist()
         }
     else:
-        raise ValueError(f"Unknown normalization method: {method}")
+        raise ValueError(f"Unknown normalization method: {method}. Use 'standard', 'minmax', or 'minmax_01'.")
 
 
 def normalize_data(data, params):
-    """Normalize data using precomputed parameters."""
+    """
+    Normalize data using precomputed parameters.
+
+    Supports:
+    - 'standard': z-score normalization (x - mean) / std
+    - 'minmax': min-max to [-1, 1]
+    - 'minmax_01': min-max to [0, 1]
+
+    Args:
+        data: Data array of shape (N, D)
+        params: Dict with 'method' and relevant parameters
+
+    Returns:
+        Normalized data
+    """
     import numpy as np
 
-    if params['method'] == 'minmax':
+    if params['method'] == 'standard':
+        data_mean = np.array(params['mean'])
+        data_std = np.array(params['std'])
+        return (data - data_mean) / data_std
+    elif params['method'] == 'minmax':
+        # Scale to [-1, 1]
         data_min = np.array(params['min'])
         data_range = np.array(params['range'])
         return 2.0 * (data - data_min) / data_range - 1.0
     elif params['method'] == 'minmax_01':
+        # Scale to [0, 1]
         data_min = np.array(params['min'])
         data_range = np.array(params['range'])
         return (data - data_min) / data_range
@@ -256,14 +296,31 @@ def normalize_data(data, params):
 
 
 def denormalize_data(data, params):
-    """Denormalize data back to original scale."""
+    """
+    Denormalize data back to original scale.
+
+    Reverses the normalization applied by normalize_data().
+
+    Args:
+        data: Normalized data array of shape (N, D)
+        params: Dict with 'method' and relevant parameters
+
+    Returns:
+        Data in original scale
+    """
     import numpy as np
 
-    if params['method'] == 'minmax':
+    if params['method'] == 'standard':
+        data_mean = np.array(params['mean'])
+        data_std = np.array(params['std'])
+        return data * data_std + data_mean
+    elif params['method'] == 'minmax':
+        # Reverse scaling from [-1, 1]
         data_min = np.array(params['min'])
         data_range = np.array(params['range'])
         return (data + 1.0) * data_range / 2.0 + data_min
     elif params['method'] == 'minmax_01':
+        # Reverse scaling from [0, 1]
         data_min = np.array(params['min'])
         data_range = np.array(params['range'])
         return data * data_range + data_min
@@ -363,19 +420,22 @@ def train_autoencoder_dynamics(
         if verbose:
             print(f"\nNo bounded activations detected - skipping normalization")
 
-    # Convert to tensors
-    x_train_tensor = torch.FloatTensor(x_train)
-    y_train_tensor = torch.FloatTensor(y_train)
-    x_val_tensor = torch.FloatTensor(x_val)
-    y_val_tensor = torch.FloatTensor(y_val)
-
-    # Device setup
+    # Device setup first to determine dtype
     if torch.backends.mps.is_available():
         device = torch.device("mps")
+        dtype = torch.float32
     elif torch.cuda.is_available():
         device = torch.device("cuda")
+        dtype = torch.float32
     else:
         device = torch.device("cpu")
+        dtype = torch.float32
+
+    # Convert to tensors with appropriate dtype
+    x_train_tensor = torch.from_numpy(x_train).to(dtype)
+    y_train_tensor = torch.from_numpy(y_train).to(dtype)
+    x_val_tensor = torch.from_numpy(x_val).to(dtype)
+    y_val_tensor = torch.from_numpy(y_val).to(dtype)
 
     # Model setup
     # Use component-specific architecture if provided, else fall back to shared parameters

@@ -72,11 +72,11 @@ def leslie_map(x: np.ndarray, th1: float = 19.6, th2: float = 23.68,
 
 
 def leslie_map_3d(x: np.ndarray,
-                  theta_1: float = 28.9,
-                  theta_2: float = 29.8,
-                  theta_3: float = 22.0,
-                  survival_1: float = 0.7,
-                  survival_2: float = 0.7) -> np.ndarray:
+                  theta_1: float = 37.5,
+                  theta_2: float = 37.5,
+                  theta_3: float = 37.5,
+                  survival_1: float = 0.8,
+                  survival_2: float = 0.6) -> np.ndarray:
     """
     Three-dimensional Leslie population model map.
 
@@ -91,11 +91,11 @@ def leslie_map_3d(x: np.ndarray,
 
     Args:
         x: State vector of shape (3,) with [x, y, z] representing three age classes
-        theta_1: Fertility parameter for age class 1 (default: 28.9)
-        theta_2: Fertility parameter for age class 2 (default: 29.8)
-        theta_3: Fertility parameter for age class 3 (default: 22.0)
-        survival_1: Survival rate from age class 0 to age class 1 (default: 0.7)
-        survival_2: Survival rate from age class 1 to age class 2 (default: 0.7)
+        theta_1: Fertility parameter for age class 1 (default: 37.5)
+        theta_2: Fertility parameter for age class 2 (default: 37.5)
+        theta_3: Fertility parameter for age class 3 (default: 37.5)
+        survival_1: Survival rate from age class 0 to age class 1 (default: 0.8)
+        survival_2: Survival rate from age class 1 to age class 2 (default: 0.6)
 
     Returns:
         Next state vector of shape (3,)
@@ -110,6 +110,10 @@ def leslie_map_3d(x: np.ndarray,
     Reference:
         Leslie, P.H., "On the use of matrices in certain population mathematics"
         Biometrika 33 (3): 183-212 (1945)
+        
+        Ilie, S. & Ugarcovici, I., "Numerical bifurcation analysis of 
+        delay differential equations" Nonlinearity 17: 1689-1711 (2004)
+        (Parameters from Section 6: bistable regime with period-2 orbits)
     """
     x0, x1, x2 = x
     x0_next = (theta_1 * x0 + theta_2 * x1 + theta_3 * x2) * np.exp(-0.1 * (x0 + x1 + x2))

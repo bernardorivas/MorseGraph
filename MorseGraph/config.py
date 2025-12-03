@@ -1,15 +1,109 @@
-"""
-Configuration management for MorseGraph experiments.
-
-This module provides utilities for loading, validating, and managing
-experiment configurations from YAML files. Supports hierarchical configs,
-validation, and integration with the ExperimentConfig class.
-"""
-
 import os
 import yaml
-from typing import Dict, Any, Optional
+import numpy as np
+from typing import Dict, Any, Optional, Callable
 from functools import partial
+
+# Import dynamical systems
+from MorseGraph import systems
+
+
+# Define a registry for dynamical systems
+# Each entry contains:
+# 'dynamics_func': The callable function for the dynamics
+# 'default_bounds': Default domain bounds as [[min_vals], [max_vals]]
+# 'default_params': Default parameters for the dynamics (if any)
+system_registry: Dict[str, Dict[str, Any]] = {
+    'map': {
+        'henon_map': {
+            'dynamics_func': systems.henon_map,
+            'default_bounds': [[-2.0, -2.0], [2.0, 2.0]],
+            'default_params': {'a': 1.4, 'b': 0.3}
+        },
+        'leslie_map': {
+            'dynamics_func': systems.leslie_map,
+            'default_bounds': [[0.0, 0.0], [30.0, 30.0]],
+            'default_params': {'th1': 19.6, 'th2': 23.68, 'mortality': 0.7}
+        },
+        'leslie_map_3d': {
+            'dynamics_func': systems.leslie_map_3d,
+            'default_bounds': [[0.0, 0.0, 0.0], [30.0, 30.0, 30.0]],
+            'default_params': {'theta_1': 28.9, 'theta_2': 29.8, 'theta_3': 22.0, 'survival_1': 0.7, 'survival_2': 0.7}
+        },
+        'ives_model': {
+            'dynamics_func': systems.ives_model,
+            'default_bounds': [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], # Example bounds, need to be carefully chosen
+            'default_params': {'r1': 3.873, 'r2': 11.746, 'c': 10**-6.435, 'd': 0.5517, 'p': 0.06659, 'q': 0.9026}
+        },
+        'ives_model_log': {
+            'dynamics_func': systems.ives_model_log,
+            'default_bounds': [[-7.0, -7.0, -7.0], [7.0, 7.0, 7.0]],
+            'default_params': {'r1': 3.873, 'r2': 11.746, 'c': 10**-6.435, 'd': 0.5517, 'p': 0.06659, 'q': 0.9026, 'offset': 1e-12}
+        }
+    },
+    'ode': {
+        'van_der_pol_ode': {
+            'dynamics_func': systems.van_der_pol_ode,
+            'default_bounds': [[-4.0, -4.0], [4.0, 4.0]],
+            'default_params': {'mu': 1.0}
+        },
+        'toggle_switch_ode': {
+            'dynamics_func': systems.toggle_switch_ode,
+            'default_bounds': [[0.0, 0.0], [200.0, 200.0]],
+            'default_params': {'alpha1': 156.25, 'alpha2': 156.25, 'beta': 2.5, 'gamma': 2.0, 'n': 4}
+        },
+        'lorenz_ode': {
+            'dynamics_func': systems.lorenz_ode,
+            'default_bounds': [[-30.0, -30.0, 0.0], [30.0, 30.0, 50.0]],
+            'default_params': {'sigma': 10.0, 'rho': 28.0, 'beta': 8.0/3.0}
+        }
+    }
+}
+
+
+class ConfigError(Exception):
+    """Custom exception for configuration related errors."""
+    pass
+
+
+def get_system_info(system_type: str, dynamics_name: str) -> Dict[str, Any]:
+    """Helper to retrieve system info from the registry."""
+    if system_type not in system_registry:
+        raise ConfigError(f"Unknown system type: {system_type}. Choose from {list(system_registry.keys())}")
+    if dynamics_name not in system_registry[system_type]:
+        raise ConfigError(f"Unknown dynamics name for {system_type}: {dynamics_name}. Choose from {list(system_registry[system_type].keys())}")
+    return system_registry[system_type][dynamics_name]
+
+
+def get_system_name(system_type: str, dynamics_name: str) -> str:
+    """Returns a formatted name for the system."""
+    return f"{system_type.capitalize()}_{dynamics_name}"
+
+
+def get_system_dynamics(system_type: str, dynamics_name: str, **kwargs) -> Callable:
+    """
+    Retrieve the callable dynamics function for a given system.
+    Applies custom parameters on top of defaults.
+    """
+    info = get_system_info(system_type, dynamics_name)
+    default_params = info.get('default_params', {})
+    
+    # Merge default params with any provided kwargs
+    final_params = {**default_params, **kwargs}
+    
+    return partial(info['dynamics_func'], **final_params)
+
+
+def get_system_bounds(system_type: str, dynamics_name: str) -> np.ndarray:
+    """Retrieve the default domain bounds for a given system."""
+    info = get_system_info(system_type, dynamics_name)
+    return np.array(info['default_bounds'])
+
+
+def get_system_parameters(system_type: str, dynamics_name: str) -> Dict[str, Any]:
+    """Retrieve the default parameters for a given system."""
+    info = get_system_info(system_type, dynamics_name)
+    return info.get('default_params', {})
 
 
 def load_yaml_config(config_path: str) -> Dict[str, Any]:
@@ -172,6 +266,13 @@ def load_experiment_config(config_path: str, system_type: str = 'map',
     # Extract parameters for ExperimentConfig
     params = {}
 
+    # System info
+    if 'system' in config_dict:
+        if 'type' in config_dict['system']:
+            params['system_type'] = config_dict['system']['type']
+        if 'name' in config_dict['system']:
+            params['dynamics_name'] = config_dict['system']['name']
+
     # Domain parameters
     if 'domain' in config_dict:
         if 'bounds' in config_dict['domain']:
@@ -194,7 +295,8 @@ def load_experiment_config(config_path: str, system_type: str = 'map',
             'subdiv_limit': 'latent_subdiv_limit',
             'padding': 'latent_padding',
             'bounds_padding': 'latent_bounds_padding',
-            'original_grid_subdiv': 'original_grid_subdiv'
+            'original_grid_subdiv': 'original_grid_subdiv',
+            'method': 'latent_morse_graph_method'
         }
         for yaml_key, param_key in mapping.items():
             if yaml_key in cmgdb_2d:
@@ -335,3 +437,4 @@ def save_config_to_yaml(config: 'ExperimentConfig', output_path: str) -> None:
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w') as f:
         yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+

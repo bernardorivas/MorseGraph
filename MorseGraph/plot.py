@@ -1,5 +1,7 @@
+import os
 import numpy as np
 import networkx as nx
+import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.collections import PatchCollection
@@ -306,7 +308,6 @@ def plot_morse_graph(morse_graph: nx.DiGraph, ax: plt.Axes = None,
     for morse_set in morse_sets:
         color = None
         if 'color' in morse_graph.nodes[morse_set]:
-            # Use color from node attribute
             color = morse_graph.nodes[morse_set]['color']
         else:
             # Generate color for backward compatibility
@@ -323,7 +324,7 @@ def plot_morse_graph(morse_graph: nx.DiGraph, ax: plt.Axes = None,
         morse_graph.nodes[morse_set]['color'] = color
 
     # Create a mapping from frozenset to a shorter string representation
-    node_labels = {node: str(i+1) for i, node in enumerate(morse_sets)}
+    node_labels = {node: str(i+1) for i, node in enumerate(morse_sets)} 
     
     # Try hierarchical layout, fallback to spring layout
     try:
@@ -343,7 +344,7 @@ def plot_morse_graph(morse_graph: nx.DiGraph, ax: plt.Axes = None,
 
     ax.set_title("Morse Graph")
 
-def plot_data_coverage(grid: AbstractGrid, box_map_data,
+def plot_data_coverage(grid: AbstractGrid, box_map_data, 
                        ax: plt.Axes = None, colormap: str = 'viridis'):
     """
     Visualize how many data points are in each box (2D only).
@@ -592,91 +593,126 @@ def plot_training_curves(train_losses, val_losses, output_path=None):
 def plot_morse_sets_3d_scatter(morse_graph, domain_bounds, output_path=None, title="Morse Sets (3D)",
                                labels: Dict[str, str] = None, equilibria: Dict[str, np.ndarray] = None,
                                periodic_orbits: Dict[str, np.ndarray] = None,
-                               marker_size_min: float = 1.0, marker_size_max: float = 100.0,
+                               scale_factor: float = 1.0,
                                data_overlay: np.ndarray = None):
     """
-    Plots the Morse sets from a CMGDB MorseGraph object on a 3D grid using a scatter plot of box centers.
-    The size of each marker is proportional to the size of the corresponding box.
+    Plots the Morse sets from a CMGDB MorseGraph object on a 3D scatter plot of box centers.
+    Box marker sizes are proportional to box dimensions in data units.
+    
+    Adapted from Marcio Gameiro's PlotMorseSets implementation.
 
     :param morse_graph: The CMGDB.MorseGraph object.
     :param domain_bounds: [[lower_x, lower_y, lower_z], [upper_x, upper_y, upper_z]]
     :param output_path: Path to save figure (if None, displays instead)
     :param title: Plot title
-    :param labels: Optional dict for axis labels, e.g. {'x': 'log(M)', 'y': 'log(A)', 'z': 'log(D)'}
-    :param equilibria: Optional dict of equilibrium points to plot, e.g. {'EQ1': [x,y,z]}
-    :param periodic_orbits: Optional dict of periodic orbits to plot, e.g. {'Period-12': array([[x,y,z], ...])}
-    :param marker_size_min: Minimum marker size for the smallest boxes.
-    :param marker_size_max: Maximum marker size for the largest boxes.
+    :param labels: Optional dict for axis labels, e.g. {'x': 'X', 'y': 'Y', 'z': 'Z'}
+    :param equilibria: Optional dict of equilibrium points to plot
+    :param periodic_orbits: Optional dict of periodic orbits to plot
+    :param scale_factor: Scale factor for marker sizes (default 1.0)
     :param data_overlay: Optional data to overlay (N x 3 array)
     """
-    fig = plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=(12, 10), dpi=100)
     ax = fig.add_subplot(111, projection='3d')
 
-    num_morse_sets = morse_graph.num_vertices()
-    cmap = cm.cool
-    colors = [cmap(i / max(num_morse_sets - 1, 1)) for i in range(num_morse_sets)]
+    # Get vertices using the CMGDB interface (more robust than range)
+    vertices = morse_graph.vertices()
+    num_morse_sets = len(vertices)
 
-    all_box_sizes = []
-    all_boxes_by_morse_set = []
-    for morse_idx in range(num_morse_sets):
-        boxes = morse_graph.morse_set_boxes(morse_idx)
-        all_boxes_by_morse_set.append(boxes)
+    # Color setup - use cool colormap
+    cmap = cm.cool
+    vertex_to_color_idx = {v: i for i, v in enumerate(vertices)}
+    
+    # Compute axis ranges for proper scaling
+    domain_bounds_arr = np.array(domain_bounds)
+    x_min, y_min, z_min = domain_bounds_arr[0]
+    x_max, y_max, z_max = domain_bounds_arr[1]
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    z_range = z_max - z_min
+
+    # Collect all boxes and find size statistics for normalization
+    all_boxes = []
+    box_sizes_by_vertex = {}
+    
+    for v in vertices:
+        boxes = morse_graph.morse_set_boxes(v)
+        box_sizes_by_vertex[v] = []
         if boxes:
             for box in boxes:
                 dim = len(box) // 2
-                size = np.mean([box[d + dim] - box[d] for d in range(dim)])
-                all_box_sizes.append(size)
-    
-    min_box_size = min(all_box_sizes) if all_box_sizes else 0
-    max_box_size = max(all_box_sizes) if all_box_sizes else 1
+                if dim == 3:
+                    # Box format: [x_min, y_min, z_min, x_max, y_max, z_max]
+                    sizes = np.array([box[d+dim] - box[d] for d in range(dim)])
+                    box_sizes_by_vertex[v].append(sizes)
+                    all_boxes.append((v, box, sizes))
 
-    def get_marker_size(box_size):
-        if max_box_size == min_box_size:
-            return marker_size_min
-        # linear scaling
-        return marker_size_min + (marker_size_max - marker_size_min) * (box_size - min_box_size) / (max_box_size - min_box_size)
-
-    for morse_idx, boxes in enumerate(all_boxes_by_morse_set):
+    # Plot Morse sets
+    for v in vertices:
+        boxes = morse_graph.morse_set_boxes(v)
         if boxes:
             dim = len(boxes[0]) // 2
-            centers = np.array([[(b[d] + b[d+dim]) / 2.0 for d in range(dim)] for b in boxes])
-            sizes = [get_marker_size(np.mean([b[d + dim] - b[d] for d in range(dim)])) for b in boxes]
-            ax.scatter(centers[:, 0], centers[:, 1], centers[:, 2],
-                      c=[colors[morse_idx]], s=sizes, alpha=0.4, marker='s',
-                      label=f'Morse Set {morse_idx}')
+            color_idx = vertex_to_color_idx[v]
+            color = cmap(color_idx / max(num_morse_sets - 1, 1))
+            
+            X, Y, Z, S = [], [], [], []
+            
+            for box in boxes:
+                # Compute box center and dimensions
+                center = np.array([(box[d] + box[d+dim]) / 2.0 for d in range(dim)])
+                sizes = np.array([box[d+dim] - box[d] for d in range(dim)])
+                
+                X.append(center[0])
+                Y.append(center[1])
+                Z.append(center[2])
+                
+                # Marker size: scale by normalized box dimensions
+                # Use the mean of normalized dimensions to get a representative size
+                normalized_sizes = sizes / np.array([x_range, y_range, z_range])
+                # Size in points^2, scaled by scale_factor
+                marker_size = (scale_factor * 100 * np.mean(normalized_sizes)) ** 2
+                S.append(marker_size)
+            
+            ax.scatter(X, Y, Z, s=S, c=[color] * len(X), alpha=0.5, marker='s',
+                      label=f'Morse Set {v}', edgecolors='none')
 
+    # Plot trajectory overlay
     if data_overlay is not None and len(data_overlay) > 0:
-        ax.scatter(data_overlay[:, 0], data_overlay[:, 1], data_overlay[:, 2], c='black', s=1, alpha=0.1, label='Data')
+        ax.scatter(data_overlay[:, 0], data_overlay[:, 1], data_overlay[:, 2],
+                  c='black', s=2, alpha=0.1, label='Data')
 
+    # Plot equilibria
     if equilibria:
         for name, point in equilibria.items():
             ax.scatter(point[0], point[1], point[2],
                        c='red', marker='*', s=200,
-                       label=name, zorder=100)
-    
+                       label=name, zorder=100, edgecolors='darkred', linewidth=1)
+
+    # Plot periodic orbits
     if periodic_orbits:
         for orbit_name, orbit_points in periodic_orbits.items():
             if orbit_points is not None and len(orbit_points) > 0:
-                # Plot orbit points as circles
                 ax.scatter(orbit_points[:, 0], orbit_points[:, 1], orbit_points[:, 2],
                           c='orange', marker='o', s=80,
-                          label=orbit_name, zorder=90, alpha=0.9)
+                          label=orbit_name, zorder=90, alpha=0.8, edgecolors='darkorange', linewidth=1)
                 
-                # Connect points with lines to show the orbit
-                # Close the orbit by connecting last point back to first
+                # Connect points to show the orbit
                 orbit_closed = np.vstack([orbit_points, orbit_points[0:1]])
                 ax.plot(orbit_closed[:, 0], orbit_closed[:, 1], orbit_closed[:, 2],
-                       'orange', alpha=0.6, zorder=85)
+                       'orange', alpha=0.6, linewidth=1.5, zorder=85)
 
-    ax.set_xlim(domain_bounds[0][0], domain_bounds[1][0])
-    ax.set_ylim(domain_bounds[0][1], domain_bounds[1][1])
-    ax.set_zlim(domain_bounds[0][2], domain_bounds[1][2])
+    # Set axis properties
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.set_zlim(z_min, z_max)
 
-    ax.set_xlabel(labels.get('x', 'X') if labels else 'X')
-    ax.set_ylabel(labels.get('y', 'Y') if labels else 'Y')
-    ax.set_zlabel(labels.get('z', 'Z') if labels else 'Z')
-    ax.set_title(title)
-    ax.legend()
+    ax.set_xlabel(labels.get('x', 'X') if labels else 'X', fontsize=12)
+    ax.set_ylabel(labels.get('y', 'Y') if labels else 'Y', fontsize=12)
+    ax.set_zlabel(labels.get('z', 'Z') if labels else 'Z', fontsize=12)
+    ax.set_title(title, fontsize=14)
+    
+    # Only show legend if not too many sets
+    if num_morse_sets <= 15:
+        ax.legend(loc='upper left', fontsize=10)
 
     plt.tight_layout()
     if output_path:
@@ -687,7 +723,7 @@ def plot_morse_sets_3d_scatter(morse_graph, domain_bounds, output_path=None, tit
 
 
 def plot_latent_space_2d(z_data, latent_bounds, morse_graph=None, output_path=None, title="Latent Space (2D)",
-                         equilibria_latent: Dict[str, np.ndarray] = None, barycenters_latent: Dict[int, list] = None, ax=None):
+                       equilibria_latent: Dict[str, np.ndarray] = None, barycenters_latent: Dict[int, list] = None, ax=None):
     """
     Plot 2D latent space with data points and optionally Morse sets.
 
@@ -708,63 +744,59 @@ def plot_latent_space_2d(z_data, latent_bounds, morse_graph=None, output_path=No
     """
     # Create figure if ax not provided
     if ax is None:
-        fig, ax = plt.subplots(figsize=(8, 8))
+        fig, ax = plt.subplots(figsize=(10, 10))
         should_close = True
     else:
         fig = ax.get_figure()
         should_close = False
 
-    # Plot data points
-    ax.scatter(z_data[:, 0], z_data[:, 1], c='lightblue', s=1, alpha=0.5, label='Data')
+    # Plot data points (light background)
+    ax.scatter(z_data[:, 0], z_data[:, 1], c='lightgray', s=1, alpha=0.2, label='Data', rasterized=True, zorder=0)
 
-    # Plot Morse sets if provided
+    # Plot Morse sets if provided (2D Latent Morse Sets)
+    # Use Viridis colormap for 2D sets
     if morse_graph is not None:
         try:
             num_morse_sets = morse_graph.num_vertices()
-            cmap = cm.viridis
-            colors = [cmap(i / max(num_morse_sets - 1, 1)) for i in range(num_morse_sets)]
+            cmap_2d = cm.viridis
+            colors_2d = [cmap_2d(i / max(num_morse_sets - 1, 1)) for i in range(num_morse_sets)]
 
             for i in range(num_morse_sets):
                 boxes = morse_graph.morse_set_boxes(i)
                 if boxes:
-                    # Add a label for the first box of each Morse set
-                    label = f'Morse Set {i}'
+                    label = f'2D Morse Set {i}'
                     for j, box in enumerate(boxes):
                         rect = Rectangle((box[0], box[1]), box[2] - box[0], box[3] - box[1],
-                                       facecolor=colors[i], edgecolor='none', alpha=0.5,
-                                       label=label if j == 0 else None)
+                                       facecolor=colors_2d[i], edgecolor='black', linewidth=0.5, alpha=0.6,
+                                       label=label if j == 0 else None, zorder=5)
                         ax.add_patch(rect)
         except AttributeError:
             # morse_graph might be NetworkX, not CMGDB
             pass
 
-    # Plot encoded 3D barycenters if provided
+    # Plot encoded 3D barycenters if provided (3D Ground Truth projections)
+    # Use Cool colormap for 3D barycenters to distinguish from 2D sets
     if barycenters_latent:
-        # Get colors matching the Morse sets if morse_graph exists
-        if morse_graph is not None:
-            try:
-                num_morse_sets = morse_graph.num_vertices()
-                cmap = cm.viridis
-                colors = [cmap(i / max(num_morse_sets - 1, 1)) for i in range(num_morse_sets)]
-            except AttributeError:
-                colors = None
-        else:
-            colors = None
-
+        num_bary_sets = len(barycenters_latent)
+        cmap_3d = cm.cool
+        # Assuming indices are 0-based and correspond to 3D morse sets count roughly
+        # We normalize based on number of keys for now, or could use max index
+        max_idx = max(barycenters_latent.keys()) if barycenters_latent else 1
+        
         for morse_set_idx, barys in barycenters_latent.items():
             if barys:
                 barys_array = np.array(barys)
-                color = colors[morse_set_idx] if colors and morse_set_idx < len(colors) else 'orange'
+                color = cmap_3d(morse_set_idx / max(max_idx, 1))
                 ax.scatter(barys_array[:, 0], barys_array[:, 1],
-                          marker='X', s=100, c=[color],
-                          label=f'3D Barycenter {morse_set_idx}' if morse_set_idx < 5 else None,
-                          zorder=9)
+                          marker='X', s=80, c=[color], edgecolors='black', linewidths=0.5,
+                          label=f'E(3D Barycenter {morse_set_idx})' if morse_set_idx < 5 else None,
+                          zorder=10)
 
     if equilibria_latent:
         for name, point in equilibria_latent.items():
             ax.plot(point[0], point[1],
-                   marker='*', markersize=15, color='red',
-                   label=name, zorder=10, linestyle='none')
+                   marker='*', markersize=18, color='red', markeredgecolor='black',
+                   label=name, zorder=20, linestyle='none')
 
     ax.set_xlim(latent_bounds[0][0], latent_bounds[1][0])
     ax.set_ylim(latent_bounds[0][1], latent_bounds[1][1])
@@ -772,7 +804,13 @@ def plot_latent_space_2d(z_data, latent_bounds, morse_graph=None, output_path=No
     ax.set_ylabel('Latent Dim 2')
     ax.set_aspect('equal')
     ax.set_title(title)
-    ax.legend()
+    
+    # Improve legend
+    handles, labels = ax.get_legend_handles_labels()
+    # Filter duplicate labels if any
+    by_label = dict(zip(labels, handles))
+    # Sort logic could be added, but default order is usually fine
+    ax.legend(by_label.values(), by_label.keys(), loc='best', fontsize='small', framealpha=0.9)
 
     if ax is None:
         plt.tight_layout()
@@ -937,10 +975,14 @@ def plot_data_boxes(ax, z_data, bounds, subdiv_max, box_color='white', box_alpha
         ax.add_patch(rect)
 
 
-def plot_morse_sets_3d_cmgdb(morse_graph, domain_bounds, output_path=None, title="Morse Sets (3D)",
-                             alpha: float = 0.3, labels: Dict[str, str] = None, **kwargs):
+def plot_morse_sets_3d(morse_graph, domain_bounds, output_path=None, title="Morse Sets (3D)",
+                             alpha: float = 0.3, labels: Dict[str, str] = None, elev=30, azim=45, 
+                             fig_w=10, fig_h=10, fontsize=15, dpi=150, timeout_seconds=30, **kwargs):
     """
     Plots the Morse sets from a CMGDB MorseGraph object on a 3D grid.
+    Follows CMGDB.PlotMorseSets3D style with Poly3DCollection cuboids.
+    
+    If rendering takes longer than timeout_seconds, the plot is skipped.
 
     :param morse_graph: The CMGDB.MorseGraph object.
     :param domain_bounds: [[lower_x, lower_y, lower_z], [upper_x, upper_y, upper_z]]
@@ -948,224 +990,425 @@ def plot_morse_sets_3d_cmgdb(morse_graph, domain_bounds, output_path=None, title
     :param title: Plot title
     :param alpha: Transparency level for the boxes (0.0-1.0).
     :param labels: Optional dict for axis labels, e.g. {'x': 'log(M)', 'y': 'log(A)', 'z': 'log(D)'}
-    :param kwargs: Additional keyword arguments to pass to Poly3DCollection.
+    :param elev: Elevation angle for 3D view (degrees)
+    :param azim: Azimuth angle for 3D view (degrees)
+    :param fig_w: Figure width in inches
+    :param fig_h: Figure height in inches
+    :param fontsize: Font size for axis labels
+    :param dpi: DPI for saved figure
+    :param timeout_seconds: Maximum time to spend rendering (default 30s). If exceeded, plot is skipped.
+    :param kwargs: Additional keyword arguments (deprecated, kept for backwards compatibility)
+    :return: True if plot succeeded, False if skipped due to timeout
     """
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
-
-    def box_to_cuboid_faces(box):
+    import time
+    
+    def _box_to_cuboid_faces(box):
+        """Convert a 3D box to 6 faces for Poly3DCollection rendering."""
         x_min, y_min, z_min = box[0], box[1], box[2]
         x_max, y_max, z_max = box[3], box[4], box[5]
 
+        # Define 8 vertices of the cuboid
         vertices = [
-            [x_min, y_min, z_min], [x_max, y_min, z_min], [x_max, y_max, z_min], [x_min, y_max, z_min],
-            [x_min, y_min, z_max], [x_max, y_min, z_max], [x_max, y_max, z_max], [x_min, y_max, z_max],
+            [x_min, y_min, z_min],  # 0: bottom-front-left
+            [x_max, y_min, z_min],  # 1: bottom-front-right
+            [x_max, y_max, z_min],  # 2: bottom-back-right
+            [x_min, y_max, z_min],  # 3: bottom-back-left
+            [x_min, y_min, z_max],  # 4: top-front-left
+            [x_max, y_min, z_max],  # 5: top-front-right
+            [x_max, y_max, z_max],  # 6: top-back-right
+            [x_min, y_max, z_max],  # 7: top-back-left
         ]
+
+        # Define 6 faces (each face has 4 vertices in counter-clockwise order)
         faces = [
-            [vertices[0], vertices[1], vertices[2], vertices[3]], [vertices[4], vertices[5], vertices[6], vertices[7]],
-            [vertices[0], vertices[1], vertices[5], vertices[4]], [vertices[2], vertices[3], vertices[7], vertices[6]],
-            [vertices[0], vertices[3], vertices[7], vertices[4]], [vertices[1], vertices[2], vertices[6], vertices[5]],
+            [vertices[0], vertices[1], vertices[2], vertices[3]],  # bottom (z=min)
+            [vertices[4], vertices[5], vertices[6], vertices[7]],  # top (z=max)
+            [vertices[0], vertices[1], vertices[5], vertices[4]],  # front (y=min)
+            [vertices[2], vertices[3], vertices[7], vertices[6]],  # back (y=max)
+            [vertices[0], vertices[3], vertices[7], vertices[4]],  # left (x=min)
+            [vertices[1], vertices[2], vertices[6], vertices[5]],  # right (x=max)
         ]
+
         return faces
 
+    start_time = time.time()
+    
+    # Count total boxes
     num_morse_sets = morse_graph.num_vertices()
+    total_boxes = sum(len(morse_graph.morse_set_boxes(i)) for i in range(num_morse_sets))
+    
+    print(f"  Plotting {total_boxes} boxes across {num_morse_sets} Morse sets...")
+    
+    # Create 3D figure
+    fig = plt.figure(figsize=(fig_w, fig_h), dpi=100)
+    ax = fig.add_subplot(111, projection='3d')
+
+    morse_nodes = range(num_morse_sets)
+    
+    # Use cm.cool colormap (matching CMGDB default for 3D)
     cmap = cm.cool
-    colors = [cmap(i / max(num_morse_sets - 1, 1)) for i in range(num_morse_sets)]
+    cmap_norm = matplotlib.colors.Normalize(vmin=0, vmax=num_morse_sets-1)
 
-    for morse_idx in range(num_morse_sets):
-        boxes = morse_graph.morse_set_boxes(morse_idx)
-        if boxes:
-            faces = []
-            for box in boxes:
-                faces.extend(box_to_cuboid_faces(box))
+    # Plot each Morse set
+    for morse_node in morse_nodes:
+        # Check timeout
+        elapsed = time.time() - start_time
+        if elapsed > timeout_seconds:
+            print(f"  WARNING: 3D cuboid rendering exceeded timeout ({timeout_seconds}s) after processing {morse_node}/{num_morse_sets} Morse sets.")
+            print(f"  Skipping 3D cuboid plot. Use scatter plot instead for dense Morse sets.")
+            plt.close(fig)
+            return False
             
-            if faces:
-                poly3d = Poly3DCollection(faces, facecolors=colors[morse_idx], alpha=alpha,
-                                         edgecolors='none', **kwargs)
-                ax.add_collection3d(poly3d)
+        morse_set_boxes = morse_graph.morse_set_boxes(morse_node)
+        
+        # Use morse_node as color index for consistency
+        clr = matplotlib.colors.to_hex(cmap(cmap_norm(morse_node)), keep_alpha=True)
 
-    ax.set_xlim(domain_bounds[0][0], domain_bounds[1][0])
-    ax.set_ylim(domain_bounds[0][1], domain_bounds[1][1])
-    ax.set_zlim(domain_bounds[0][2], domain_bounds[1][2])
+        # Collect all faces for this Morse set
+        faces = []
+        for box in morse_set_boxes:
+            faces.extend(_box_to_cuboid_faces(box))
 
-    ax.set_xlabel(labels.get('x', 'X') if labels else 'X')
-    ax.set_ylabel(labels.get('y', 'Y') if labels else 'Y')
-    ax.set_zlabel(labels.get('z', 'Z') if labels else 'Z')
-    ax.set_title(title)
+        if faces:
+            # Create 3D polygon collection for this Morse set (matching CMGDB style)
+            poly3d = Poly3DCollection(faces, facecolors=clr, alpha=alpha,
+                                     edgecolors='none', linewidths=0)
+            ax.add_collection3d(poly3d)
+
+    # Set axis limits
+    ax.set_xlim([domain_bounds[0][0], domain_bounds[1][0]])
+    ax.set_ylim([domain_bounds[0][1], domain_bounds[1][1]])
+    ax.set_zlim([domain_bounds[0][2], domain_bounds[1][2]])
+
+    # Set viewing angle (matching CMGDB defaults)
+    ax.view_init(elev=elev, azim=azim)
+
+    # Add axis labels
+    ax.set_xlabel(labels.get('x', '$x$') if labels else '$x$', fontsize=fontsize)
+    ax.set_ylabel(labels.get('y', '$y$') if labels else '$y$', fontsize=fontsize)
+    ax.set_zlabel(labels.get('z', '$z$') if labels else '$z$', fontsize=fontsize)
+    
+    # Set tick label size
+    ax.tick_params(labelsize=fontsize)
+    
+    # Set title
+    ax.set_title(title, fontsize=fontsize)
 
     plt.tight_layout()
+    
+    # Check timeout before saving
+    elapsed = time.time() - start_time
+    if elapsed > timeout_seconds:
+        print(f"  WARNING: 3D cuboid rendering exceeded timeout ({timeout_seconds}s) during finalization.")
+        print(f"  Skipping save. Use scatter plot instead.")
+        plt.close(fig)
+        return False
+    
     if output_path:
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=dpi, bbox_inches='tight')
         plt.close(fig)
     else:
         plt.show()
+    
+    elapsed = time.time() - start_time
+    print(f"  3D cuboid plot completed in {elapsed:.1f}s")
+    return True
 
-# =============================================================================
-# Encoder/Decoder Round-Trip Analysis
-# =============================================================================
 
-def plot_encoder_decoder_roundtrip(
-    encoder,
-    decoder,
-    device,
-    original_bounds,
-    latent_bounds,
-    n_grid_points=50,
-    output_path=None,
-    title_prefix="",
-    labels=None
+import os
+
+def plot_morse_sets_3d_projections(
+    morse_graph,
+    barycenters_3d,
+    output_dir,
+    system_name,
+    domain_bounds,
+    cmap=cm.cool,
+    prefix=""
 ):
     """
-    Visualize encoder/decoder round-trip transformations.
-
-    Creates a 2x3 multi-panel figure showing:
-    - Top row: Original space (3D)
-      - Uniform grid sample in original space
-      - Decoded latent grid: D(latent_grid)
-      - Round-trip: D(E(grid_sample))
-    - Bottom row: Latent space (2D)
-      - Encoded grid sample: E(grid_sample)
-      - Regular latent grid
-      - Re-encoded decoded grid: E(D(latent_grid))
-
-    This visualization helps assess:
-    - Encoder/decoder reconstruction quality
-    - Coverage of latent space
-    - Consistency of round-trip transformations
+    Plots 2D projections of 3D Morse sets onto the xy, xz, and yz planes.
 
     Args:
-        encoder: PyTorch encoder model (input_dim -> latent_dim)
-        decoder: PyTorch decoder model (latent_dim -> input_dim)
-        device: PyTorch device
-        original_bounds: [[x_min, y_min, z_min], [x_max, y_max, z_max]] for original space
-        latent_bounds: [[z0_min, z1_min], [z0_max, z1_max]] for latent space
-        n_grid_points: Number of grid points per dimension
-        output_path: Path to save figure (if None, displays instead)
-        title_prefix: Prefix for subplot titles (e.g., "Ives Model - ")
-        labels: Dict with keys 'x', 'y', 'z' for axis labels (optional)
-
-    Returns:
-        Dictionary with generated samples:
-            - 'grid_sample_3d': Uniform grid in original space
-            - 'encoded_grid': E(grid_sample)
-            - 'roundtrip_3d': D(E(grid_sample))
-            - 'latent_grid': Regular grid in latent space
-            - 'decoded_grid': D(latent_grid)
-            - 'reencoded_grid': E(D(latent_grid))
-
-    Example:
-        >>> samples = plot_encoder_decoder_roundtrip(
-        ...     encoder, decoder, device,
-        ...     original_bounds=[[-1, -4, -1], [2, 1, 1]],
-        ...     latent_bounds=[[-3, -3], [3, 3]],
-        ...     output_path='results/roundtrip.png',
-        ...     title_prefix='Ives Model - ',
-        ...     labels={'x': 'log(M)', 'y': 'log(A)', 'z': 'log(D)'}
-        ... )
+        morse_graph: CMGDB MorseGraph object.
+        barycenters_3d: Dictionary of barycenters for each Morse set (keyed by vertex).
+        output_dir: Directory to save the projection plots.
+        system_name: Name of the system for plot titles.
+        domain_bounds: The bounds of the 3D domain.
+        cmap: Colormap to use for Morse sets.
+        prefix: Optional filename prefix (e.g., "03") for ordering.
     """
-    import torch
-    from mpl_toolkits.mplot3d import Axes3D
+    if morse_graph is None:
+        print("Morse graph is None, skipping 3D projections.")
+        return
 
-    if labels is None:
-        labels = {'x': 'X', 'y': 'Y', 'z': 'Z'}
+    vertices = morse_graph.vertices()
+    num_morse_sets = len(vertices)
+    vertex_to_color_idx = {v: i for i, v in enumerate(vertices)}
+    colors = [cmap(i / max(num_morse_sets - 1, 1)) for i in range(num_morse_sets)]
 
-    # Generate uniform grid in original 3D space
-    x = np.linspace(original_bounds[0][0], original_bounds[1][0], n_grid_points)
-    y = np.linspace(original_bounds[0][1], original_bounds[1][1], n_grid_points)
-    z = np.linspace(original_bounds[0][2], original_bounds[1][2], n_grid_points)
-    xx, yy, zz = np.meshgrid(x, y, z)
-    grid_sample_3d = np.stack([xx.ravel(), yy.ravel(), zz.ravel()], axis=1)
+    # Projections: (dim1, dim2, name, label1, label2)
+    projections = [(0, 1, 'xy', 'X', 'Y'), (0, 2, 'xz', 'X', 'Z'), (1, 2, 'yz', 'Y', 'Z')]
 
-    # Generate regular grid in latent 2D space
-    z0 = np.linspace(latent_bounds[0][0], latent_bounds[1][0], n_grid_points)
-    z1 = np.linspace(latent_bounds[0][1], latent_bounds[1][1], n_grid_points)
-    z0_grid, z1_grid = np.meshgrid(z0, z1)
-    latent_grid = np.stack([z0_grid.ravel(), z1_grid.ravel()], axis=1)
+    file_prefix = f"{prefix}_" if prefix else ""
 
-    # Compute transformations
-    with torch.no_grad():
-        # Original -> Latent -> Original
-        grid_tensor = torch.FloatTensor(grid_sample_3d).to(device)
-        encoded_grid = encoder(grid_tensor).cpu().numpy()
-        roundtrip_3d = decoder(torch.FloatTensor(encoded_grid).to(device)).cpu().numpy()
+    for dim1_idx, dim2_idx, proj_name, label1, label2 in projections:
+        fig, ax = plt.subplots(figsize=(9, 9), dpi=100)
+        ax.set_title(f"{system_name} - 3D Morse Sets Projection ({label1}-{label2})", fontsize=14)
+        ax.set_xlabel(label1, fontsize=12)
+        ax.set_ylabel(label2, fontsize=12)
+        ax.set_xlim(domain_bounds[0][dim1_idx], domain_bounds[1][dim1_idx])
+        ax.set_ylim(domain_bounds[0][dim2_idx], domain_bounds[1][dim2_idx])
+        ax.set_aspect('equal', adjustable='box')
+        ax.grid(True, linestyle='--', alpha=0.4)
 
-        # Latent -> Original -> Latent
-        latent_tensor = torch.FloatTensor(latent_grid).to(device)
-        decoded_grid = decoder(latent_tensor).cpu().numpy()
-        reencoded_grid = encoder(torch.FloatTensor(decoded_grid).to(device)).cpu().numpy()
+        # Plot barycenters for each Morse set
+        for v in vertices:
+            color_idx = vertex_to_color_idx[v]
+            if v in barycenters_3d and barycenters_3d[v]:
+                barys = np.array(barycenters_3d[v])
+                ax.scatter(barys[:, dim1_idx], barys[:, dim2_idx],
+                           c=[colors[color_idx]], s=60, alpha=0.7, marker='o',
+                           label=f'Morse Set {v}', edgecolors='none')
+        
+        # Add legend if reasonable number of sets
+        if num_morse_sets <= 15:
+            ax.legend(loc='best', fontsize=10)
 
-    # Create figure
-    fig = plt.figure(figsize=(18, 12))
+        plt.tight_layout()
+        filename = f"{file_prefix}morse_sets_3d_projection_{proj_name}.png"
+        plt.savefig(os.path.join(output_dir, filename), dpi=150, bbox_inches='tight')
+        plt.close(fig)
 
-    # Top row: 3D visualizations
-    # Panel 1: Original grid sample
-    ax1 = fig.add_subplot(2, 3, 1, projection='3d')
-    ax1.scatter(grid_sample_3d[:, 0], grid_sample_3d[:, 1], grid_sample_3d[:, 2],
-                c='blue', alpha=0.3, s=1)
-    ax1.set_xlabel(labels['x'])
-    ax1.set_ylabel(labels['y'])
-    ax1.set_zlabel(labels['z'])
-    ax1.set_title(f'{title_prefix}Original Grid Sample')
+    print(f"  Saved 3D Morse set projections to {output_dir}")
 
-    # Panel 2: Decoded latent grid
-    ax2 = fig.add_subplot(2, 3, 2, projection='3d')
-    ax2.scatter(decoded_grid[:, 0], decoded_grid[:, 1], decoded_grid[:, 2],
-                c='green', alpha=0.3, s=1)
-    ax2.set_xlabel(labels['x'])
-    ax2.set_ylabel(labels['y'])
-    ax2.set_zlabel(labels['z'])
-    ax2.set_title(f'{title_prefix}D(Latent Grid)')
 
-    # Panel 3: Round-trip
-    ax3 = fig.add_subplot(2, 3, 3, projection='3d')
-    ax3.scatter(roundtrip_3d[:, 0], roundtrip_3d[:, 1], roundtrip_3d[:, 2],
-                c='red', alpha=0.3, s=1)
-    ax3.set_xlabel(labels['x'])
-    ax3.set_ylabel(labels['y'])
-    ax3.set_zlabel(labels['z'])
-    ax3.set_title(f'{title_prefix}D(E(Grid Sample))')
+def plot_morse_sets_3d_with_trajectories(
+    morse_graph,
+    domain_bounds,
+    output_path=None,
+    title="Morse Sets (3D) with Trajectories",
+    labels=None,
+    trajectory_data=None,
+    n_trajectories=100,
+    use_tail_only=True,
+    tail_fraction=0.5,
+    scale_factor=1.0
+):
+    """
+    Plot 3D Morse sets with trajectory tail overlay.
+    
+    Box marker sizes are proportional to box dimensions in data units.
+    Trajectories shown as low-alpha scatter to visualize attractor behavior.
 
-    # Bottom row: 2D latent space visualizations
-    # Panel 4: Encoded grid
-    ax4 = fig.add_subplot(2, 3, 4)
-    ax4.scatter(encoded_grid[:, 0], encoded_grid[:, 1], c='blue', alpha=0.3, s=1)
-    ax4.set_xlabel('Latent Dim 0')
-    ax4.set_ylabel('Latent Dim 1')
-    ax4.set_title(f'{title_prefix}E(Grid Sample)')
-    ax4.grid(True, alpha=0.3)
+    :param morse_graph: CMGDB MorseGraph object.
+    :param domain_bounds: [[lower_x, lower_y, lower_z], [upper_x, upper_y, upper_z]]
+    :param output_path: Path to save figure
+    :param title: Plot title
+    :param labels: Optional dict for axis labels
+    :param trajectory_data: np.ndarray of shape (N, n_points, 3) or dict with 'Y_trajectories'
+    :param n_trajectories: Number of trajectories to sample and plot
+    :param use_tail_only: If True, plot only the tail of each trajectory
+    :param tail_fraction: Fraction of trajectory to use as tail (e.g., 0.5 = last 50%)
+    :param scale_factor: Scale factor for Morse set marker sizes
+    """
+    fig = plt.figure(figsize=(13, 11), dpi=100)
+    ax = fig.add_subplot(111, projection='3d')
 
-    # Panel 5: Latent grid
-    ax5 = fig.add_subplot(2, 3, 5)
-    ax5.scatter(latent_grid[:, 0], latent_grid[:, 1], c='green', alpha=0.3, s=1)
-    ax5.set_xlabel('Latent Dim 0')
-    ax5.set_ylabel('Latent Dim 1')
-    ax5.set_title(f'{title_prefix}Latent Grid')
-    ax5.grid(True, alpha=0.3)
+    vertices = morse_graph.vertices()
+    num_morse_sets = len(vertices)
+    
+    cmap = cm.cool
+    vertex_to_color_idx = {v: i for i, v in enumerate(vertices)}
 
-    # Panel 6: Re-encoded
-    ax6 = fig.add_subplot(2, 3, 6)
-    ax6.scatter(reencoded_grid[:, 0], reencoded_grid[:, 1], c='red', alpha=0.3, s=1)
-    ax6.set_xlabel('Latent Dim 0')
-    ax6.set_ylabel('Latent Dim 1')
-    ax6.set_title(f'{title_prefix}E(D(Latent Grid))')
-    ax6.grid(True, alpha=0.3)
+    # Compute axis ranges for proper scaling
+    domain_bounds_arr = np.array(domain_bounds)
+    x_min, y_min, z_min = domain_bounds_arr[0]
+    x_max, y_max, z_max = domain_bounds_arr[1]
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    z_range = z_max - z_min
+
+    # Plot Morse sets
+    for v in vertices:
+        boxes = morse_graph.morse_set_boxes(v)
+        if boxes:
+            dim = len(boxes[0]) // 2
+            color_idx = vertex_to_color_idx[v]
+            color = cmap(color_idx / max(num_morse_sets - 1, 1))
+            
+            X, Y, Z, S = [], [], [], []
+            
+            for box in boxes:
+                center = np.array([(box[d] + box[d+dim]) / 2.0 for d in range(dim)])
+                sizes = np.array([box[d+dim] - box[d] for d in range(dim)])
+                
+                X.append(center[0])
+                Y.append(center[1])
+                Z.append(center[2])
+                
+                normalized_sizes = sizes / np.array([x_range, y_range, z_range])
+                marker_size = (scale_factor * 100 * np.mean(normalized_sizes)) ** 2
+                S.append(marker_size)
+            
+            ax.scatter(X, Y, Z, s=S, c=[color] * len(X), alpha=0.5, marker='s',
+                      label=f'Morse Set {v}', edgecolors='none')
+
+    # Plot trajectory data
+    if trajectory_data is not None:
+        # Handle different input formats
+        if isinstance(trajectory_data, dict):
+            if 'Y_trajectories' in trajectory_data:
+                traj_data = trajectory_data['Y_trajectories']
+            elif 'X_trajectories' in trajectory_data:
+                traj_data = trajectory_data['X_trajectories']
+            else:
+                traj_data = None
+        else:
+            traj_data = trajectory_data
+
+        if traj_data is not None and len(traj_data) > 0:
+            # Sample trajectories if needed
+            if len(traj_data) > n_trajectories:
+                indices = np.random.choice(len(traj_data), n_trajectories, replace=False)
+                traj_data = traj_data[indices]
+            
+            # Extract tail if requested
+            if use_tail_only and len(traj_data.shape) == 3:
+                tail_start = int(traj_data.shape[1] * (1 - tail_fraction))
+                traj_data = traj_data[:, tail_start:, :]
+                traj_data = traj_data.reshape(-1, 3)
+            elif len(traj_data.shape) == 3:
+                traj_data = traj_data.reshape(-1, 3)
+            
+            # Plot trajectory tails
+            ax.scatter(traj_data[:, 0], traj_data[:, 1], traj_data[:, 2],
+                      c='black', s=2, alpha=0.15, label=f'Trajectory Tails (n={len(traj_data)})',
+                      edgecolors='none')
+
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.set_zlim(z_min, z_max)
+
+    ax.set_xlabel(labels.get('x', 'X') if labels else 'X', fontsize=12)
+    ax.set_ylabel(labels.get('y', 'Y') if labels else 'Y', fontsize=12)
+    ax.set_zlabel(labels.get('z', 'Z') if labels else 'Z', fontsize=12)
+    ax.set_title(title, fontsize=14)
+    
+    if num_morse_sets <= 15:
+        ax.legend(loc='upper left', fontsize=10)
 
     plt.tight_layout()
-
     if output_path:
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
     else:
         plt.show()
 
-    return {
-        'grid_sample_3d': grid_sample_3d,
-        'encoded_grid': encoded_grid,
-        'roundtrip_3d': roundtrip_3d,
-        'latent_grid': latent_grid,
-        'decoded_grid': decoded_grid,
-        'reencoded_grid': reencoded_grid
-    }
+
+def plot_morse_sets_3d_projections_with_trajectories(
+    morse_graph,
+    barycenters_3d,
+    trajectory_data,
+    output_dir,
+    system_name,
+    domain_bounds,
+    cmap=cm.cool,
+    prefix="",
+    n_trajectories=100,
+    use_tail_only=True,
+    tail_fraction=0.5
+):
+    """
+    Plot 2D projections of 3D Morse sets with trajectory tail overlay.
+    
+    Creates XY, XZ, and YZ projections showing Morse set barycenters and
+    trajectory tail points to visualize attractor structure.
+
+    :param morse_graph: CMGDB MorseGraph object.
+    :param barycenters_3d: Dictionary of barycenters for each Morse set (keyed by vertex).
+    :param trajectory_data: Either np.ndarray or dict with trajectory data.
+    :param output_dir: Directory to save the projection plots.
+    :param system_name: Name of the system for plot titles.
+    :param domain_bounds: The bounds of the 3D domain.
+    :param cmap: Colormap to use for Morse sets.
+    :param prefix: Optional filename prefix for ordering.
+    :param n_trajectories: Number of trajectories to sample and plot.
+    :param use_tail_only: If True, plot only the tail of each trajectory.
+    :param tail_fraction: Fraction of trajectory to use as tail.
+    """
+    if morse_graph is None:
+        return
+
+    vertices = morse_graph.vertices()
+    num_morse_sets = len(vertices)
+    
+    vertex_to_color_idx = {v: i for i, v in enumerate(vertices)}
+    colors = [cmap(i / max(num_morse_sets - 1, 1)) for i in range(num_morse_sets)]
+
+    # Process trajectory data
+    traj_data = None
+    if trajectory_data is not None:
+        if isinstance(trajectory_data, dict):
+            if 'Y_trajectories' in trajectory_data:
+                traj_data = trajectory_data['Y_trajectories']
+            elif 'X_trajectories' in trajectory_data:
+                traj_data = trajectory_data['X_trajectories']
+        else:
+            traj_data = trajectory_data
+
+    # Extract tail if needed
+    if traj_data is not None and use_tail_only and len(traj_data.shape) == 3:
+        tail_start = int(traj_data.shape[1] * (1 - tail_fraction))
+        traj_data = traj_data[:, tail_start:, :]
+
+    projections = [(0, 1, 'xy', 'X', 'Y'), (0, 2, 'xz', 'X', 'Z'), (1, 2, 'yz', 'Y', 'Z')]
+    file_prefix = f"{prefix}_" if prefix else ""
+
+    for dim1_idx, dim2_idx, proj_name, label1, label2 in projections:
+        fig, ax = plt.subplots(figsize=(10, 9), dpi=100)
+        ax.set_title(f"{system_name} - {label1}-{label2} Projection with Trajectories", fontsize=14)
+        ax.set_xlabel(label1, fontsize=12)
+        ax.set_ylabel(label2, fontsize=12)
+        ax.set_xlim(domain_bounds[0][dim1_idx], domain_bounds[1][dim1_idx])
+        ax.set_ylim(domain_bounds[0][dim2_idx], domain_bounds[1][dim2_idx])
+        ax.set_aspect('equal', adjustable='box')
+        ax.grid(True, linestyle='--', alpha=0.4)
+
+        # Plot Morse sets
+        for v in vertices:
+            color_idx = vertex_to_color_idx[v]
+            if v in barycenters_3d and barycenters_3d[v]:
+                barys = np.array(barycenters_3d[v])
+                ax.scatter(barys[:, dim1_idx], barys[:, dim2_idx],
+                           c=[colors[color_idx]], s=80, alpha=0.7, marker='o',
+                           label=f'Morse Set {v}', edgecolors='none', zorder=10)
+
+        # Plot trajectory projections
+        if traj_data is not None and len(traj_data) > 0:
+            # Sample trajectories if needed
+            n_traj_to_plot = min(n_trajectories, len(traj_data))
+            if n_traj_to_plot < len(traj_data):
+                indices = np.random.choice(len(traj_data), n_traj_to_plot, replace=False)
+                traj_subset = traj_data[indices]
+            else:
+                traj_subset = traj_data
+
+            # Flatten and project trajectories
+            traj_flat = traj_subset.reshape(-1, 3)
+            ax.scatter(traj_flat[:, dim1_idx], traj_flat[:, dim2_idx],
+                      c='black', s=2, alpha=0.12, label=f'Trajectory Tails',
+                      edgecolors='none', zorder=5)
+
+        if num_morse_sets <= 15:
+            ax.legend(loc='best', fontsize=10)
+
+        plt.tight_layout()
+        filename = f"{file_prefix}morse_sets_3d_projection_{proj_name}_with_trajectories.png"
+        plt.savefig(os.path.join(output_dir, filename), dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
+    print(f"  Saved 3D Morse set projections with trajectories to {output_dir}")
 
 
 # =============================================================================
@@ -1301,20 +1544,20 @@ def plot_trajectory_analysis(
 # =============================================================================
 
 def plot_morse_graph_comparison(
-    morse_graph_3d,
-    morse_graph_2d_data,
-    morse_graph_2d_restricted,
-    barycenters_3d,
-    encoder,
-    device,
-    z_data,
-    z_restricted,
-    latent_bounds,
-    domain_bounds,
-    output_path=None,
-    title_prefix="",
-    equilibria=None,
-    equilibria_latent=None,
+    morse_graph_3d, 
+    morse_graph_2d_data, 
+    morse_graph_2d_restricted, 
+    barycenters_3d, 
+    encoder, 
+    device, 
+    z_data, 
+    z_restricted, 
+    latent_bounds, 
+    domain_bounds, 
+    output_path=None, 
+    title_prefix="", 
+    equilibria=None, 
+    equilibria_latent=None, 
     labels=None
 ):
     """
@@ -1378,7 +1621,7 @@ def plot_morse_graph_comparison(
     def get_graph_stats(mg):
         if hasattr(mg, 'num_vertices'):
             # CMGDB MorseGraph
-            return mg.num_vertices(), len(mg.edges())
+            return mg.num_vertices(), sum(1 for v in range(mg.num_vertices()) for _ in mg.adjacencies(v))
         else:
             # NetworkX graph
             return len(mg.nodes()), len(mg.edges())
@@ -1445,7 +1688,7 @@ def plot_morse_graph_comparison(
     if equilibria is not None:
         for name, eq_point in equilibria.items():
             ax4.scatter([eq_point[0]], [eq_point[1]], [eq_point[2]],
-                       c='red', s=200, marker='*',
+                       c='red', marker='*', s=200, 
                        label=name, zorder=10)
     
     ax4.set_xlabel(labels['x'])
@@ -1461,7 +1704,7 @@ def plot_morse_graph_comparison(
     # Panel 5: 2D latent space (Data method)
     ax5 = fig.add_subplot(2, 3, 5)
     plot_latent_space_2d(
-        z_data,
+        z_data, 
         latent_bounds,
         morse_graph=morse_graph_2d_data,
         output_path=None,
@@ -1500,35 +1743,35 @@ def plot_morse_graph_comparison(
     }
 
 
-def _plot_morse_sets_rectangles(ax, morse_graph, cmap_colors, alpha=0.5, zorder=2):
+def _plot_morse_sets_rectangles(ax, morse_graph, cmap_colors, alpha=0.2, zorder=0):
     """
     Plot morse sets as rectangles - faithful to actual box bounds.
-    
+
     This approach directly draws each box as a Rectangle patch in data coordinates,
     ensuring the visual representation exactly matches the computational structure.
-    
+
     Args:
         ax: Matplotlib axis to plot on
         morse_graph: CMGDB MorseGraph object
         cmap_colors: List of colors for each morse set
-        alpha: Transparency of rectangles
-        zorder: Z-order for layering
+        alpha: Transparency of rectangles (default: 0.2 for subtle background)
+        zorder: Z-order for layering (default: 0 to place behind everything)
     """
     from matplotlib.patches import Rectangle
-    
+
     num_morse_sets = morse_graph.num_vertices()
-    
+
     for morse_idx in range(num_morse_sets):
         boxes = morse_graph.morse_set_boxes(morse_idx)
         if not boxes:
             continue
-            
+
         for box in boxes:
-            # Box format for 2D: [xmin, xmax, ymin, ymax]
+            # Box format from CMGDB for 2D: [xmin, ymin, xmax, ymax]
             rect = Rectangle(
-                (box[0], box[2]),           # lower-left corner (xmin, ymin)
-                box[1] - box[0],            # width
-                box[3] - box[2],            # height
+                (box[0], box[1]),           # lower-left corner (xmin, ymin)
+                box[2] - box[0],            # width (xmax - xmin)
+                box[3] - box[1],            # height (ymax - ymin)
                 facecolor=cmap_colors[morse_idx],
                 alpha=alpha,
                 edgecolor='none',
@@ -1539,17 +1782,17 @@ def _plot_morse_sets_rectangles(ax, morse_graph, cmap_colors, alpha=0.5, zorder=
 
 def plot_2x2_morse_comparison(
     morse_graph_3d,
-    morse_graph_2d,
-    domain_bounds_3d,
-    latent_bounds_2d,
-    encoder,
-    device,
-    z_data,
-    output_path=None,
-    title_prefix="",
-    equilibria=None,
-    periodic_orbits=None,
-    equilibria_latent=None,
+    morse_graph_2d, 
+    domain_bounds_3d, 
+    latent_bounds_2d, 
+    encoder, 
+    device, 
+    z_data, 
+    output_path=None, 
+    title_prefix="", 
+    equilibria=None, 
+    periodic_orbits=None, 
+    equilibria_latent=None, 
     labels=None
 ):
     """
@@ -1557,7 +1800,7 @@ def plot_2x2_morse_comparison(
     - Top-left: 3D Morse graph diagram (using CMGDB.PlotMorseGraph)
     - Top-right: 2D Morse graph diagram (using CMGDB.PlotMorseGraph)
     - Bottom-left: 3D scatter (barycenters with equilibria/orbits)
-    - Bottom-right: 2D latent space scatter (using rectangle patches)
+    - Bottom-right: 2D latent space scatter (using rectangle patches) 
     
     Args:
         morse_graph_3d: CMGDB MorseGraph object for 3D
@@ -1580,7 +1823,7 @@ def plot_2x2_morse_comparison(
     from PIL import Image
     import CMGDB
     
-    fig = plt.figure(figsize=(16, 14))
+    fig = plt.figure(figsize=(16, 14)) 
     
     if labels is None:
         labels = {'x': 'X', 'y': 'Y', 'z': 'Z'}
@@ -1634,10 +1877,10 @@ def plot_2x2_morse_comparison(
     
     # Plot equilibria
     if equilibria:
-        for name, point in equilibria.items():
-            ax3.scatter(point[0], point[1], point[2],
+        for name, eq_point in equilibria.items():
+            ax3.scatter([eq_point[0]], [eq_point[1]], [eq_point[2]],
                        c='red', marker='*', s=300,
-                       label=name, zorder=100, alpha=0.95)
+                       label=name, zorder=10)
     
     # Plot periodic orbits
     if periodic_orbits:
@@ -1669,13 +1912,12 @@ def plot_2x2_morse_comparison(
     # Plot latent space data (background)
     ax4.scatter(z_data[:, 0], z_data[:, 1], c='lightgray', s=1, alpha=0.3, rasterized=True, zorder=1)
 
-    # Plot Morse sets using rectangle patches
+    # Plot Morse sets using rectangle patches (low opacity, behind everything)
     node_colors_2d = [cmap_2d(i / max(num_morse_sets_2d - 1, 1))
                       for i in range(num_morse_sets_2d)]
 
     _plot_morse_sets_rectangles(
-        ax4, morse_graph_2d, node_colors_2d,
-        alpha=0.5, zorder=2
+        ax4, morse_graph_2d, node_colors_2d
     )
     
     # Plot equilibria in latent space
@@ -1711,132 +1953,6 @@ def plot_2x2_morse_comparison(
         'num_edges_3d': num_edges_3d,
         'num_edges_2d': num_edges_2d
     }
-
-
-def plot_latent_space_flexible(
-    z_data=None,
-    morse_graph=None,
-    latent_bounds=None,
-    barycenters_latent=None,
-    equilibrium_latent=None,
-    period12_latent=None,
-    output_path=None,
-    title="Latent Space",
-    show_data=False,
-    show_morse_sets=False,
-    show_barycenters=False,
-    show_equilibrium=False,
-    show_period12=False,
-    barycenter_size=6,
-    cmap_morse_sets='viridis',
-    cmap_barycenters='cool'
-):
-    """
-    Flexible latent space visualization with multiple display options.
-    Uses rectangle patches for morse sets.
-
-    Args:
-        z_data: Latent space data points (N x 2)
-        morse_graph: CMGDB MorseGraph object
-        latent_bounds: [[xmin, ymin], [xmax, ymax]]
-        barycenters_latent: Dict mapping morse_set_id -> array of barycenter points
-        equilibrium_latent: Equilibrium point in latent space [x, y]
-        period12_latent: Period-12 orbit points in latent space (12 x 2)
-        output_path: Path to save figure
-        title: Plot title
-        show_data: Show gray data scatter
-        show_morse_sets: Show morse sets (rectangle patches)
-        show_barycenters: Show E(3D barycenters)
-        show_equilibrium: Show equilibrium point
-        show_period12: Show E(period-12 orbit)
-        barycenter_size: Marker size for barycenters (4-9 recommended)
-        cmap_morse_sets: Colormap name for 2D Morse sets (default: 'viridis')
-        cmap_barycenters: Colormap name for E(3D barycenters) (default: 'cool')
-    """
-    import matplotlib.pyplot as plt
-    import matplotlib.cm as cm
-
-    fig, ax = plt.subplots(figsize=(10, 10))
-
-    cmap_sets = getattr(cm, cmap_morse_sets)
-    cmap_barys = getattr(cm, cmap_barycenters)
-    
-    # Determine number of morse sets for coloring
-    if morse_graph is not None:
-        num_morse_sets = morse_graph.num_vertices()
-    elif barycenters_latent is not None:
-        num_morse_sets = len(barycenters_latent)
-    else:
-        num_morse_sets = 1
-
-    # Create color maps for both morse sets and barycenters
-    num_colors = max(num_morse_sets, 1)
-    colors_morse_sets = [cmap_sets(i / max(num_colors - 1, 1)) for i in range(num_colors)]
-    colors_barycenters = [cmap_barys(i / max(num_colors - 1, 1)) for i in range(num_colors)]
-
-    # 1. Show data (background, if requested)
-    if show_data and z_data is not None:
-        ax.scatter(z_data[:, 0], z_data[:, 1],
-                  c='lightgray', s=1, alpha=0.3, rasterized=True, zorder=1)
-
-    # 2. Show morse sets using rectangle patches (2D computed - viridis)
-    if show_morse_sets and morse_graph is not None:
-        _plot_morse_sets_rectangles(
-            ax, morse_graph, colors_morse_sets,
-            alpha=0.5, zorder=2
-        )
-
-    # 3. Show E(3D barycenters) (from 3D - cool colormap)
-    if show_barycenters and barycenters_latent is not None:
-        for morse_idx, barys in barycenters_latent.items():
-            if len(barys) > 0:
-                barys_array = np.array(barys)
-                color_idx = morse_idx if morse_idx < len(colors_barycenters) else 0
-                ax.scatter(barys_array[:, 0], barys_array[:, 1],
-                          c=[colors_barycenters[color_idx]], s=barycenter_size,
-                          alpha=0.8, marker='o', zorder=4,
-                          label=f'E(Barycenters {morse_idx})')
-    
-    # 4. Show equilibrium
-    if show_equilibrium and equilibrium_latent is not None:
-        ax.scatter(equilibrium_latent[0], equilibrium_latent[1],
-                  c='red', marker='*', s=200, alpha=0.95,
-                  label='Equilibrium', zorder=5)
-    
-    # 5. Show E(period-12 orbit) with connecting lines
-    if show_period12 and period12_latent is not None and len(period12_latent) > 0:
-        # Plot orbit points
-        ax.scatter(period12_latent[:, 0], period12_latent[:, 1],
-                  c='orange', marker='o', s=80, alpha=0.9,
-                  label='E(Period-12)', zorder=6)
-        
-        # Connect with lines (close the loop)
-        orbit_closed = np.vstack([period12_latent, period12_latent[0:1]])
-        ax.plot(orbit_closed[:, 0], orbit_closed[:, 1],
-               'orange', linewidth=2.5, alpha=0.7, zorder=5)
-    
-    # Set limits
-    if latent_bounds is not None:
-        ax.set_xlim(latent_bounds[0][0], latent_bounds[1][0])
-        ax.set_ylim(latent_bounds[0][1], latent_bounds[1][1])
-    
-    ax.set_xlabel('Latent Dim 0', fontsize=12)
-    ax.set_ylabel('Latent Dim 1', fontsize=12)
-    ax.set_title(title, fontsize=14, fontweight='bold')
-    ax.set_aspect('equal', adjustable='box')
-    
-    # Add legend if any elements shown
-    handles, labels = ax.get_legend_handles_labels()
-    if len(handles) > 0 and len(handles) <= 8:  # Don't show legend if too many items
-        ax.legend(fontsize=9, loc='best')
-    
-    plt.tight_layout()
-    
-    if output_path:
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-    else:
-        plt.show()
 
 
 def plot_preimage_classification(
@@ -1940,9 +2056,9 @@ def plot_preimage_classification(
     ax3 = fig.add_subplot(2, 3, 3, projection='3d')
 
     # Plot different views - ONLY morse sets with points
-    for ax_idx, (ax, elev, azim) in enumerate([
-        (ax1, 30, 45),
-        (ax2, 30, 135),
+    for ax_idx, (ax, elev, azim) in enumerate([ 
+        (ax1, 30, 45), 
+        (ax2, 30, 135), 
         (ax3, 30, 225)
     ]):
         for morse_idx in morse_sets_with_points:  # Only plot sets with points
@@ -2040,3 +2156,120 @@ def plot_preimage_classification(
         plt.show()
 
     return preimages
+
+def plot_encoder_decoder_roundtrip(X, encoder, decoder, output_path=None, num_samples=500, latent_grid_points=None):
+    """
+    Plot a 3x2 grid visualization of the encoder-decoder mappings.
+    
+    Rows:
+    1. Original Grid (3D) | Encoded Grid (2D)
+    2. Decoded Latent Grid (3D) | Latent Grid (2D)
+    3. Reconstructed Original (3D) | Re-encoded Latent (2D)
+    
+    Args:
+        X: Input data (N, D) - Original data sample
+        encoder: Encoder model
+        decoder: Decoder model
+        output_path: Path to save figure
+        num_samples: Number of points to use for original data sample
+        latent_grid_points: Optional pre-generated latent grid points. If None, generated from bounds of E(X).
+    """
+    import torch
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+
+    # 1. Prepare Data
+    if len(X) > num_samples:
+        indices = np.random.choice(len(X), num_samples, replace=False)
+        X_sample = X[indices]
+    else:
+        X_sample = X
+
+    try:
+        device = next(encoder.parameters()).device
+    except Exception:
+        device = 'cpu'
+        
+    X_tensor = torch.tensor(X_sample, dtype=torch.float32).to(device)
+    
+    with torch.no_grad():
+        # E(X)
+        Z_sample = encoder(X_tensor).cpu().numpy()
+        
+        # D(E(X)) - Reconstruction
+        X_recon = decoder(encoder(X_tensor)).cpu().numpy()
+        
+        # Prepare Latent Grid
+        if latent_grid_points is None:
+            z_min = Z_sample.min(axis=0)
+            z_max = Z_sample.max(axis=0)
+            # Add slight padding
+            padding = 0.1 * (z_max - z_min)
+            z_min -= padding
+            z_max += padding
+            
+            # Create grid (20x20 = 400 points)
+            grid_res = 20
+            x = np.linspace(z_min[0], z_max[0], grid_res)
+            y = np.linspace(z_min[1], z_max[1], grid_res)
+            xx, yy = np.meshgrid(x, y)
+            latent_grid = np.column_stack([xx.ravel(), yy.ravel()])
+        else:
+            latent_grid = latent_grid_points
+
+        latent_grid_tensor = torch.tensor(latent_grid, dtype=torch.float32).to(device)
+        
+        # D(Z_grid)
+        X_latent_decoded = decoder(latent_grid_tensor).cpu().numpy()
+        
+        # E(D(Z_grid)) - Consistency
+        Z_latent_reencoded = encoder(decoder(latent_grid_tensor)).cpu().numpy()
+
+    # 2. Plotting
+    fig = plt.figure(figsize=(16, 18))
+    
+    # Helper for 3D scatter
+    def plot_3d(ax, data, title, color='blue', marker='o', alpha=0.5):
+        ax.scatter(data[:, 0], data[:, 1], data[:, 2], c=color, marker=marker, s=10, alpha=alpha)
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_title(title)
+
+    # Helper for 2D scatter
+    def plot_2d(ax, data, title, color='red', marker='o', alpha=0.5):
+        ax.scatter(data[:, 0], data[:, 1], c=color, marker=marker, s=10, alpha=alpha)
+        ax.set_xlabel('Latent 1')
+        ax.set_ylabel('Latent 2')
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+
+    # (1,1) Original Data (3D)
+    ax1 = fig.add_subplot(3, 2, 1, projection='3d')
+    plot_3d(ax1, X_sample, "Original Data (X)", color='blue')
+    # (1,2) Encoded Data (2D)
+    ax2 = fig.add_subplot(3, 2, 2)
+    plot_2d(ax2, Z_sample, "Encoded Data E(X)", color='red')
+
+    # (2,1) Decoded Latent Grid (3D)
+    ax3 = fig.add_subplot(3, 2, 3, projection='3d')
+    plot_3d(ax3, X_latent_decoded, "Decoded Latent Grid D(Z_grid)", color='green')
+
+    # (2,2) Latent Grid (2D)
+    ax4 = fig.add_subplot(3, 2, 4)
+    plot_2d(ax4, latent_grid, "Latent Grid (Z_grid)", color='purple')
+
+    # (3,1) Reconstructed Original (3D)
+    ax5 = fig.add_subplot(3, 2, 5, projection='3d')
+    plot_3d(ax5, X_recon, "Reconstructed D(E(X))", color='orange')
+
+    # (3,2) Re-encoded Latent Grid (2D)
+    ax6 = fig.add_subplot(3, 2, 6)
+    plot_2d(ax6, Z_latent_reencoded, "Re-encoded Latent E(D(Z_grid))", color='brown')
+
+    plt.tight_layout()
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+    else:
+        plt.show()
