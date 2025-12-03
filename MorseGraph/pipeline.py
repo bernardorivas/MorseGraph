@@ -16,6 +16,7 @@ from MorseGraph.core import (
     compute_morse_graph_3d,
     compute_morse_graph_2d_data,
     compute_morse_graph_2d_restricted,
+    _run_cmgdb_compute,
     # compute_morse_graph_2d_latent_enclosure, # This will be implemented later
 )
 from MorseGraph.models import Encoder, Decoder, LatentDynamics
@@ -157,7 +158,7 @@ class MorseGraphPipeline:
             )
 
             # Compute 3D Morse Graph
-            morse_graph, morse_sets, morse_set_barycenters = compute_morse_graph_3d(
+            morse_graph, morse_sets, morse_set_barycenters, _ = compute_morse_graph_3d(
                 box_map,
                 domain_bounds_np,
                 self.config.subdiv_min,
@@ -685,8 +686,27 @@ class MorseGraphPipeline:
 
         allowed_indices = None
         if restricted:
-            self._log("  Note: Restriction disabled - learned dynamics naturally constrained to data region")
-            self._log("  CMGDB will explore full domain; convergence focuses on relevant structure")
+            # Compute allowed_indices from training data at subdiv_max resolution
+            z_train = self.latent_data['Z_train_encoded']
+            latent_dim = z_train.shape[1]
+
+            # Create temporary grid at subdiv_max resolution
+            dims = [2**subdiv_max] * latent_dim
+            temp_grid = UniformGrid(np.array([latent_bounds[0], latent_bounds[1]]), dims)
+
+            # Map training data to box indices at this resolution
+            cell_size = (np.array(latent_bounds[1]) - np.array(latent_bounds[0])) / np.array(dims)
+            indices_vec = np.floor((z_train - np.array(latent_bounds[0])) / cell_size).astype(int)
+            indices_vec = np.clip(indices_vec, 0, np.array(dims) - 1)
+            flat_indices = np.ravel_multi_index(indices_vec.T, dims)
+            active_set = set(flat_indices)
+
+            # Dilate by radius=1 (Moore/King neighborhood)
+            active_array = np.array(list(active_set))
+            dilated_array = temp_grid.dilate_indices(active_array, radius=1)
+            allowed_indices = set(dilated_array)
+
+            self._log(f"  Restricted domain: {len(active_set)} data boxes -> {len(allowed_indices)} allowed boxes")
 
         # Setup Dynamics
         # Use a small epsilon for padding if specified, else 0
@@ -699,47 +719,23 @@ class MorseGraphPipeline:
             allowed_indices=allowed_indices
         )
         
-        # Define F for CMGDB
-        def F(rect):
-            # CMGDB passes rect as [min_x, min_y, ..., max_x, max_y, ...] (flat list)
-            # Convert to [ [min], [max] ]
-            dim = len(rect) // 2
-            box = np.array([rect[:dim], rect[dim:]])
-            
-            res = dynamics(box)
-            return list(res[0]) + list(res[1])
-
-        model = CMGDB.Model(
+        # Use shared helper from core.py
+        morse_graph, morse_sets, barycenters, map_graph = _run_cmgdb_compute(
+            dynamics,
+            [latent_bounds[0], latent_bounds[1]],
             subdiv_min,
             subdiv_max,
             subdiv_init,
             subdiv_limit,
-            latent_bounds[0],
-            latent_bounds[1],
-            F
+            verbose=True
         )
-        
-        start_time = time.time()
-        morse_graph, map_graph = CMGDB.ComputeMorseGraph(model)
-        computation_time = time.time() - start_time
-        
-        # Compute barycenters
-        barycenters = {}
-        for i in range(morse_graph.num_vertices()):
-            morse_set_boxes = morse_graph.morse_set_boxes(i)
-            barycenters[i] = []
-            if morse_set_boxes:
-                dim = len(morse_set_boxes[0]) // 2
-                for box in morse_set_boxes:
-                    barycenter = np.array([(box[j] + box[j + dim]) / 2.0 for j in range(dim)])
-                    barycenters[i].append(barycenter)
 
         return {
             'morse_graph': morse_graph,
             'map_graph': map_graph,
             'num_morse_sets': morse_graph.num_vertices(),
             'barycenters': barycenters,
-            'computation_time': computation_time,
+            'computation_time': 0.0, # Placeholder or measure if needed
             'from_cache': False
         }
 

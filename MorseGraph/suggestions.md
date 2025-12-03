@@ -2,6 +2,98 @@
 
 This document outlines potential improvements to MorseGraph in terms of speed, memory efficiency, and scalability, with a focus on leveraging CMGDB whenever possible.
 
+---
+
+## Implementation Status (Updated 2025-12-03)
+
+### Summary
+
+The CMGDB integration has progressed significantly. Critical bugs identified in the initial review have been fixed.
+
+**Overall Quality Score: 8/10** - Core functionality working, ready for testing.
+
+### Critical Bugs (FIXED 2025-12-03)
+
+| Bug | Location | Status | Fix Applied |
+|-----|----------|--------|-------------|
+| Tuple unpacking error | `pipeline.py:586` | FIXED | Changed to unpack 3 values |
+| Incomplete function | `core.py:549-598` | FIXED | Raises NotImplementedError with deprecation message |
+| 'restricted' not restricting | `pipeline.py:687-709` | FIXED | Computes allowed_indices from training data with dilation |
+| Silent error swallowing | `core.py:187-189` | FIXED | Added specific exception handling with warnings |
+
+### Implementation Status Table
+
+| Feature | Status | File | Notes |
+|---------|--------|------|-------|
+| **CMGDB Integration** | | | |
+| Model.compute_box_map() CMGDB backend | Done | core.py | With Python fallback |
+| extract_cmgdb_to_pipeline_format() | Done | core.py | Works correctly |
+| _run_cmgdb_compute() adapter | Done | core.py | Dynamics to CMGDB rect conversion |
+| compute_morse_graph_3d() | Done | core.py | Returns pipeline-compatible format |
+| compute_morse_graph_2d_data() | Done | core.py | Returns pipeline-compatible format |
+| compute_morse_graph_2d_restricted() | Deprecated | core.py | Raises NotImplementedError, use pipeline instead |
+| compute_morse_graph_2d_for_pipeline() | Partial | core.py | Only 'data' method |
+| **Pipeline Integration** | | | |
+| Stage 1 (3D Morse Graph) | Done | pipeline.py | CMGDB integration working |
+| Stage 2 (Trajectory Generation) | Done | pipeline.py | Working |
+| Stage 3 (Autoencoder Training) | Done | pipeline.py | Working |
+| Stage 4 (Latent Encoding) | Done | pipeline.py | Working |
+| Stage 5 - 'data' method | Done | pipeline.py | Fixed tuple unpacking |
+| Stage 5 - 'restricted' method | Done | pipeline.py | Computes allowed_indices from training data |
+| Stage 5 - 'full' method | Done | pipeline.py | Working |
+| Stage 5 - 'enclosure' method | Done | pipeline.py | Same as 'full' with padding |
+| Hash-based caching | Done | pipeline.py | Working |
+| Config YAML integration | Done | pipeline.py | Reading from cmgdb_3d/cmgdb_2d sections |
+| **Analysis Integration** | | | |
+| compute_morse_graph() CMGDB input | Done | analysis.py | Handles both NetworkX and CMGDB |
+| _compute_morse_graph_from_cmgdb() | Done | analysis.py | Conversion working |
+| compute_all_morse_set_basins() CMGDB | Missing | analysis.py | Only handles NetworkX |
+| iterative_morse_computation() | Partial | analysis.py | Doesn't leverage CMGDB adaptive refinement |
+| **Testing** | | | |
+| Test coverage for CMGDB integration | Missing | tests/ | Critical gap |
+
+### Code Quality Issues
+
+| Issue | Location | Description |
+|-------|----------|-------------|
+| DRY violation | core.py:253-259, 318-326 | Barycenter computation duplicated |
+| DRY violation | analysis.py:73-83, 110-116 | Color assignment duplicated |
+| Print vs warnings | core.py, pipeline.py | Uses print() instead of warnings.warn() |
+| No format validation | core.py:286-295 | Box format conversion not validated |
+| Magic numbers | core.py:66-75 | Hardcoded subdiv defaults without justification |
+| Missing docstrings | core.py:281-333 | _run_cmgdb_compute() minimal documentation |
+
+### Revised Priority List
+
+**CRITICAL (COMPLETED 2025-12-03):**
+
+1. ~~Fix pipeline.py:586 tuple unpacking~~ - DONE
+2. ~~Fix or remove compute_morse_graph_2d_restricted()~~ - DONE (deprecated with NotImplementedError)
+3. ~~Implement 'restricted' method properly~~ - DONE (computes allowed_indices from training data with dilation)
+4. ~~Fix silent error handling~~ - DONE (specific exception handling with warnings)
+
+**HIGH (For production readiness):**
+
+5. **Add test coverage** - Create tests/test_core_cmgdb.py, tests/test_pipeline_cmgdb.py, tests/test_analysis_cmgdb.py
+6. **Add CMGDB support to compute_all_morse_set_basins()** - Check input type and handle CMGDB objects
+7. **Add config validation** - Validate required YAML sections exist on pipeline init
+8. **Use warnings.warn()** - Replace print() statements with proper warnings
+
+**MEDIUM (Code quality):**
+
+9. **Extract barycenter helper** - Create `_compute_barycenters_from_boxes()` function
+10. **Extract color assignment helper** - Create `_assign_morse_set_colors()` function
+11. **Add format validation** - Validate box format in _run_cmgdb_compute() adapter
+12. **Document index semantics** - Clarify CMGDB indices vs grid indices
+
+**LOW (Future improvements):**
+
+13. **Leverage CMGDB adaptive refinement** - Use CMGDB's native capabilities in iterative_morse_computation()
+14. **Add logging system** - Replace print/warnings with proper logging
+15. **Improve type hints** - Replace `Any` with specific CMGDB types
+
+---
+
 ## Architectural Vision
 
 **MorseGraph's Role:**

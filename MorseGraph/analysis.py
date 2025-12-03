@@ -1,9 +1,9 @@
 import networkx as nx
 import numpy as np
 import matplotlib.cm as cm
-from typing import List, Set, Dict, FrozenSet
+from typing import List, Set, Dict, FrozenSet, Union, Any
 
-def compute_morse_graph(box_map: nx.DiGraph, assign_colors: bool = True, cmap_name: str = 'tab10') -> nx.DiGraph:
+def compute_morse_graph(box_map: Union[nx.DiGraph, Any], assign_colors: bool = True, cmap_name: str = 'tab10') -> nx.DiGraph:
     """
     Compute the Morse graph from a BoxMap, properly handling transient states.
 
@@ -20,6 +20,10 @@ def compute_morse_graph(box_map: nx.DiGraph, assign_colors: bool = True, cmap_na
              represented by a frozenset of the box indices it contains.
              If assign_colors=True, each node has a 'color' attribute.
     """
+    # Check if box_map is CMGDB.MorseGraph
+    if hasattr(box_map, 'num_vertices') and hasattr(box_map, 'morse_set'):
+        return _compute_morse_graph_from_cmgdb(box_map, assign_colors, cmap_name)
+
     # Get all strongly connected components
     all_sccs = list(nx.strongly_connected_components(box_map))
     
@@ -79,6 +83,40 @@ def compute_morse_graph(box_map: nx.DiGraph, assign_colors: bool = True, cmap_na
                 morse_graph.nodes[morse_set]['color'] = cmap(i / max(num_sets, 10))
 
     return morse_graph
+
+def _compute_morse_graph_from_cmgdb(morse_graph_cmgdb, assign_colors, cmap_name):
+    """Extract Morse graph directly from CMGDB object."""
+    morse_graph_nx = nx.DiGraph()
+    
+    # CMGDB already computed the Morse graph!
+    # We just need to convert it to NetworkX format
+    # Nodes should be frozenset of MapGraph indices to match compute_morse_graph behavior
+    
+    morse_sets = {}
+    for v in range(morse_graph_cmgdb.num_vertices()):
+        # Get indices in the MapGraph (phase space boxes)
+        # Note: These are CMGDB indices, not necessarily grid indices
+        indices = morse_graph_cmgdb.morse_set(v)
+        morse_set_frozen = frozenset(indices)
+        morse_sets[v] = morse_set_frozen
+        morse_graph_nx.add_node(morse_set_frozen)
+    
+    # Add edges from CMGDB adjacencies
+    for v in range(morse_graph_cmgdb.num_vertices()):
+        for adj_v in morse_graph_cmgdb.adjacencies(v):
+            morse_graph_nx.add_edge(morse_sets[v], morse_sets[adj_v])
+    
+    # Assign colors
+    if assign_colors:
+        morse_sets_list = list(morse_graph_nx.nodes())
+        num_sets = len(morse_sets_list)
+        if num_sets > 0:
+            cmap = cm.get_cmap(cmap_name)
+            for i, morse_set in enumerate(morse_sets_list):
+                morse_graph_nx.nodes[morse_set]['color'] = cmap(i / max(num_sets, 10))
+    
+    return morse_graph_nx
+
 
 def compute_all_morse_set_basins(morse_graph: nx.DiGraph, box_map: nx.DiGraph) -> Dict[FrozenSet[int], Set[int]]:
     """
