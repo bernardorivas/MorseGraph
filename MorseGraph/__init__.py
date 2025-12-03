@@ -15,7 +15,15 @@ from .dynamics import (
     BoxMapData,
     BoxMapODE
 )
-from .core import Model
+from .core import (
+    Model,
+    compute_morse_graph_3d,
+    compute_morse_graph_3d_for_pipeline,
+    compute_morse_graph_2d_data,
+    compute_morse_graph_2d_for_pipeline,
+    extract_cmgdb_to_pipeline_format,
+    _CMGDB_AVAILABLE
+)
 from .analysis import (
     compute_morse_graph,
     compute_all_morse_set_basins,
@@ -55,6 +63,13 @@ __all__ = [
     'BoxMapData',
     'BoxMapODE',
     'Model',
+    # CMGDB computation
+    'compute_morse_graph_3d',
+    'compute_morse_graph_3d_for_pipeline',
+    'compute_morse_graph_2d_data',
+    'compute_morse_graph_2d_for_pipeline',
+    'extract_cmgdb_to_pipeline_format',
+    '_CMGDB_AVAILABLE',
     # Analysis
     'compute_morse_graph',
     'compute_all_morse_set_basins',

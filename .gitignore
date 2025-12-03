@@ -8,8 +8,6 @@ dist/
 
 # Virtual environments
 .venv/
-venv/
-env/
 
 # Testing
 .pytest_cache/
@@ -36,18 +34,10 @@ CLAUDE.md
 GEMINI.md
 
 # Project outputs
-/examples/ives_model_output/
-/examples/leslie_map_3d_output/
-/leslie_map_3d/experiments/
-/examples/output/
-data/
+examples/ives_model_output/
+examples/leslie_map_3d_output/
+examples/output/
 examples/data/
-examples/figures/
-examples/leslie_experiments/
-examples/leslie_model/
-examples/leslie_map_3d/leslie_map_3d_results/*.mgdb
-examples/leslie_map_3d/leslie_map_3d_results/*.csv
-examples/leslie_map_3d/leslie_map_3d_results/*.npz
 
 # Testing
 tests/

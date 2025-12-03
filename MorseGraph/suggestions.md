@@ -2,6 +2,65 @@
 
 This document outlines potential improvements to MorseGraph in terms of speed, memory efficiency, and scalability, with a focus on leveraging CMGDB whenever possible.
 
+## Architectural Vision
+
+**MorseGraph's Role:**
+- **Python Wrapper**: Provides Pythonic interface to CMGDB's C++ backend
+- **MORALS Extension**: Integrates MORALS approach (learned latent dynamics, autoencoder workflows)
+- **Extended Tools**: Provides additional analysis, visualization, and computation utilities beyond CMGDB and MORALS
+
+**Key Principle**: MorseGraph wraps and extends CMGDB, making it easier to use while adding high-level functionality.
+
+### What MorseGraph Is:
+
+1. **Python Wrapper Around CMGDB**
+   - Wraps CMGDB's C++ backend with Pythonic interfaces
+   - Handles data format conversions (CMGDB ↔ NumPy ↔ NetworkX)
+   - Provides automatic parameter selection and optimization
+   - Makes CMGDB easier to use
+
+2. **MORALS Workflow Integration**
+   - Complete autoencoder + latent dynamics pipeline
+   - Learned latent space analysis
+   - Comparison between full-space and latent-space dynamics
+   - Preimage analysis and barycenter projection
+   - Research-ready workflows for learned dynamics
+
+3. **Extended Analysis Tools**
+   - Basin analysis beyond CMGDB's basics
+   - Stability and robustness analysis
+   - Parameter sensitivity analysis
+   - Comparison utilities for multiple systems
+   - Statistical analysis and metrics
+
+4. **Python Ecosystem Integration**
+   - NumPy/SciPy for numerical operations
+   - PyTorch for machine learning (MORALS)
+   - NetworkX for graph analysis
+   - Matplotlib for visualization
+   - Seamless integration with Python ML workflows
+
+### What MorseGraph Is NOT:
+
+- **Not a replacement for CMGDB**: CMGDB remains the core computation engine
+- **Not just MORALS**: Provides tools beyond MORALS workflows
+- **Not a pure Python reimplementation**: Uses CMGDB for all heavy computation
+- **Not a separate tool**: Extends and wraps CMGDB, not competes with it
+
+### Value Proposition:
+
+**For Users:**
+- Get CMGDB's performance automatically
+- Use Pythonic interfaces instead of C++ API
+- Access MORALS workflows out of the box
+- Extended analysis tools for research
+
+**For Developers:**
+- Single codebase to maintain (wrapper + extensions)
+- Leverage CMGDB's optimized C++ code
+- Focus on high-level functionality
+- Python ecosystem integration
+
 ---
 
 ## Table of Contents
@@ -18,84 +77,102 @@ This document outlines potential improvements to MorseGraph in terms of speed, m
 
 ## CMGDB Integration Improvements
 
-### 1. **ALWAYS USE CMGDB** - Core Refactoring
+### 1. **CMGDB as Computation Backend - Pipeline-Compatible Wrapper**
 
-**Current State:** MorseGraph has dual code paths - pure Python (`Model.compute_box_map()`) and CMGDB (`compute_morse_graph_3d()`, etc.). Users must choose which to use.
+**Current State:** MorseGraph has dual code paths - pure Python (`Model.compute_box_map()`) and CMGDB (`compute_morse_graph_3d()`, etc.). The pipeline expects specific data structures that work with your caching and visualization systems.
 
-**Proposed Change:** **Make CMGDB the PRIMARY and ONLY computation backend.** Refactor `Model.compute_box_map()` to always use CMGDB internally.
+**Problem with CMGDB:** CMGDB is very structured and opinionated - it's hard to extract data and use it with custom tools/visualizations. Your pipeline expects specific dict formats with keys like `'morse_graph'`, `'morse_sets'`, `'morse_set_barycenters'`, `'config'`, `'method'`.
 
-**Architecture:**
+**Proposed Change:** **Use CMGDB as computation backend, but ensure compatibility with your pipeline's expected data structures:**
+- **Wrap CMGDB for computation** - Use CMGDB's C++ backend for speed
+- **Extract data in pipeline format** - Return dicts compatible with `save_morse_graph_data()` / `load_morse_graph_data()`
+- **Preserve pipeline structure** - Keep YAML configs, caching system, visualization tools
+- **Support all pipeline methods** - Ensure 'data', 'restricted', 'full', 'enclosure' methods work seamlessly
+- **Compatible with existing functions** - `compute_morse_graph_3d()`, `compute_morse_graph_2d_data()`, etc. should return pipeline-compatible formats
+
+**Architecture - Pipeline-Compatible Data Extraction:**
 
 ```python
-# In core.py Model class
-def compute_box_map(self, 
-                    subdiv_min: int = None,
-                    subdiv_max: int = None,
-                    subdiv_init: int = 0,
-                    subdiv_limit: int = 10000,
-                    return_format: str = 'networkx') -> Union[nx.DiGraph, 'CMGDB.MorseGraph']:
+# In core.py - Update existing functions to return pipeline-compatible formats
+def compute_morse_graph_3d(
+    dynamics,
+    domain_bounds,
+    subdiv_min=30,
+    subdiv_max=42,
+    subdiv_init=0,
+    subdiv_limit=10000,
+    verbose=True
+) -> Tuple['CMGDB.MorseGraph', Dict[int, List], Dict[int, List]]:
     """
-    Compute BoxMap using CMGDB backend.
+    Compute 3D Morse graph using CMGDB.
     
-    CMGDB is now the primary computation engine for all dimensions.
-    This provides significant performance improvements and consistency.
+    Returns format compatible with pipeline's expected structure:
+    - morse_graph: CMGDB.MorseGraph object (for advanced use)
+    - morse_sets: Dict[int, List] mapping vertex index to list of boxes
+    - morse_set_barycenters: Dict[int, List] mapping vertex index to list of barycenters
     
-    Args:
-        subdiv_min: Minimum subdivision depth (auto-selected if None)
-        subdiv_max: Maximum subdivision depth (auto-selected if None)
-        subdiv_init: Initial subdivision depth
-        subdiv_limit: Maximum number of boxes
-        return_format: 'networkx' (default) or 'cmgdb'
-    
-    Returns:
-        If return_format='networkx': NetworkX DiGraph (backward compatible)
-        If return_format='cmgdb': CMGDB.MorseGraph object (for advanced usage)
-    
-    Raises:
-        ImportError: If CMGDB is not installed
+    This matches what pipeline expects in morse_graph_3d_data dict.
     """
-    try:
-        import CMGDB
-    except ImportError:
-        raise ImportError(
-            "CMGDB is required. Please install it via:\n"
-            "  pip install -e ./cmgdb\n"
-            "MorseGraph now uses CMGDB as the primary computation backend."
-        )
+    # Use CMGDB for computation (existing code)
+    morse_graph_cmgdb, map_graph_cmgdb = _run_cmgdb_compute(...)
     
-    # Auto-select subdivision parameters based on dimension
-    dim = self.grid.dim
-    if subdiv_min is None:
-        subdiv_min = {2: 20, 3: 30, 4: 15}.get(dim, 15)
-    if subdiv_max is None:
-        subdiv_max = {2: 28, 3: 42, 4: 20}.get(dim, 20)
+    # Extract in pipeline-compatible format
+    morse_sets = {}
+    barycenters = {}
     
-    # Get domain bounds from grid
-    domain_bounds = [self.grid.bounds[0].tolist(), 
-                     self.grid.bounds[1].tolist()]
+    for v in range(morse_graph_cmgdb.num_vertices()):
+        boxes = morse_graph_cmgdb.morse_set_boxes(v)
+        morse_sets[v] = boxes  # List of boxes (CMGDB format: flat lists)
+        
+        # Compute barycenters (pipeline expects this)
+        barycenters[v] = []
+        if boxes:
+            dim = len(boxes[0]) // 2
+            for box in boxes:
+                barycenter = np.array([(box[j] + box[j + dim]) / 2.0 for j in range(dim)])
+                barycenters[v].append(barycenter)
     
-    # Adapt Dynamics to CMGDB interface
-    def F(rect):
-        """CMGDB function adapter."""
-        dim = len(rect) // 2
-        box = np.array([rect[:dim], rect[dim:]])
-        res = self.dynamics(box, **self.dynamics_kwargs)
-        return list(res[0]) + list(res[1])
+    return morse_graph_cmgdb, morse_sets, barycenters
+
+# Pipeline wrapper that ensures correct format
+def compute_morse_graph_3d_for_pipeline(
+    dynamics,
+    domain_bounds,
+    config: ExperimentConfig,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Compute 3D Morse graph and return in pipeline's expected format.
     
-    # Build CMGDB model
-    cmgdb_model = CMGDB.Model(
-        subdiv_min, subdiv_max, subdiv_init, subdiv_limit,
-        domain_bounds[0], domain_bounds[1], F
+    Returns dict compatible with save_morse_graph_data():
+    {
+        'morse_graph': CMGDB.MorseGraph,
+        'morse_sets': Dict[int, List],
+        'morse_set_barycenters': Dict[int, List],
+        'config': config.to_dict()
+    }
+    """
+    morse_graph, morse_sets, barycenters = compute_morse_graph_3d(
+        dynamics, domain_bounds, 
+        subdiv_min=config.subdiv_min,
+        subdiv_max=config.subdiv_max,
+        subdiv_init=config.subdiv_init,
+        subdiv_limit=config.subdiv_limit,
+        **kwargs
     )
     
-    # Compute Morse graph
-    morse_graph_cmgdb, map_graph_cmgdb = CMGDB.ComputeMorseGraph(cmgdb_model)
-    
-    if return_format == 'cmgdb':
-        return morse_graph_cmgdb
-    
-    # Convert to NetworkX for backward compatibility
-    return self._cmgdb_to_networkx(morse_graph_cmgdb, map_graph_cmgdb)
+    return {
+        'morse_graph': morse_graph,
+        'morse_sets': morse_sets,
+        'morse_set_barycenters': barycenters,
+        'config': config.to_dict()
+    }
+```
+
+**Key Principle:** 
+- **Use CMGDB for computation** (it's fast)
+- **Extract data in pipeline format** (compatible with your caching/visualization)
+- **Preserve your tools** (YAML configs, pipeline, visualizations work unchanged)
 
 def _cmgdb_to_networkx(self, morse_graph_cmgdb, map_graph_cmgdb) -> nx.DiGraph:
     """
@@ -124,24 +201,501 @@ def _cmgdb_to_networkx(self, morse_graph_cmgdb, map_graph_cmgdb) -> nx.DiGraph:
 ```
 
 **Benefits:**
-- **Single code path** - eliminates dual implementation complexity
-- **Consistent performance** - CMGDB's C++ backend is always used
-- **Better scalability** - CMGDB handles large grids efficiently
-- **Access to CMGDB features** - Conley index, advanced visualization, etc.
-- **Backward compatible** - can still return NetworkX format
+- **CMGDB Performance**: Use fast C++ backend for computation
+- **Flexibility**: Extract data your way, not forced into CMGDB's structure
+- **Your Pipeline Preserved**: YAML configs, pipeline structure, visualization tools all work
+- **Easy Data Extraction**: Get what you need for your tools/figures
+- **Not Opinionated**: Don't force CMGDB's rigid structure on users
+
+**MorseGraph's Value Proposition:**
+1. **Computation Backend**: Use CMGDB for fast computation
+2. **Flexible Data Access**: Extract data in formats YOU need
+3. **Your Tools Work**: YAML configs, pipeline, visualizations preserved
+4. **MORALS Integration**: Complete workflows with your config system
+5. **Freedom from CMGDB Structure**: Work with data your way
 
 **Migration Path:**
-1. Make CMGDB a required dependency (or check at import)
-2. Refactor `Model.compute_box_map()` to use CMGDB
-3. Add conversion utilities CMGDB ↔ NetworkX
-4. Update `compute_morse_graph()` to work with CMGDB objects
-5. Deprecate pure Python path (remove after transition period)
+1. Make CMGDB a required dependency (MorseGraph wraps it)
+2. Refactor `Model.compute_box_map()` to use CMGDB internally
+3. Add conversion utilities CMGDB ↔ NetworkX (wrapper functionality)
+4. Enhance MORALS workflows (learned latent dynamics)
+5. Add extended analysis tools (basins, visualization, etc.)
 
-**Implementation Priority:** **CRITICAL** - This is the foundation for all other optimizations
+**Implementation Priority:** **CRITICAL** - This defines MorseGraph's core architecture
 
 ---
 
-### 2. CMGDB ↔ NetworkX Conversion Utilities
+### 2. Preserve Your YAML Config System and Pipeline Integration
+
+**Current State:** You have a well-designed YAML config system with sections for `cmgdb_3d`, `cmgdb_2d`, `training`, `model`, `loss_weights`, etc. The pipeline reads from these configs and expects specific data structures.
+
+**Suggestion:** **Ensure CMGDB integration reads directly from your YAML configs and produces pipeline-compatible outputs.**
+
+```python
+# Your config system stays the same - CMGDB integration reads from it
+config = load_experiment_config('configs/ives_default.yaml')
+
+# Pipeline's run_stage_1_3d() expects this format:
+def compute_morse_graph_3d_for_pipeline(
+    dynamics,
+    domain_bounds,
+    config: ExperimentConfig
+) -> Dict[str, Any]:
+    """
+    Compute 3D Morse graph using CMGDB, reading from YOUR config.
+    
+    Returns dict compatible with pipeline's morse_graph_3d_data:
+    {
+        'morse_graph': CMGDB.MorseGraph,
+        'morse_sets': Dict[int, List],  # vertex -> boxes
+        'morse_set_barycenters': Dict[int, List],  # vertex -> barycenters
+        'config': config.to_dict()  # For reproducibility
+    }
+    """
+    # Read from YOUR config structure (cmgdb_3d section)
+    morse_graph, morse_sets, barycenters = compute_morse_graph_3d(
+        dynamics,
+        domain_bounds,
+        subdiv_min=config.subdiv_min,  # From cmgdb_3d section
+        subdiv_max=config.subdiv_max,
+        subdiv_init=config.subdiv_init,
+        subdiv_limit=config.subdiv_limit,
+        verbose=True
+    )
+    
+    # Return in pipeline's expected format
+    return {
+        'morse_graph': morse_graph,
+        'morse_sets': morse_sets,
+        'morse_set_barycenters': barycenters,
+        'config': config.to_dict()
+    }
+
+# Similarly for 2D computations
+def compute_morse_graph_2d_for_pipeline(
+    method: str,  # 'data', 'restricted', 'full', 'enclosure'
+    config: ExperimentConfig,
+    latent_bounds: np.ndarray,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Compute 2D Morse graph using CMGDB, reading from YOUR config.
+    
+    Returns dict compatible with pipeline's morse_graph_2d_data:
+    {
+        'morse_graph': CMGDB.MorseGraph,
+        'morse_sets': Dict[int, List],
+        'morse_set_barycenters': Dict[int, List],
+        'config': config.to_dict(),
+        'method': method  # Important for pipeline
+    }
+    """
+    # Read from YOUR config structure (cmgdb_2d section)
+    if method == 'data':
+        return compute_morse_graph_2d_data(...)
+    elif method in ['full', 'restricted']:
+        return compute_morse_graph_2d_restricted(...)
+    # ... etc
+```
+
+**Benefits:**
+- **Your Configs Work**: No need to change YAML structure
+- **Pipeline Compatible**: Works seamlessly with `MorseGraphPipeline.run_stage_1_3d()` and `run_stage_5_latent_morse()`
+- **Caching Compatible**: Returns format compatible with `save_morse_graph_data()` / `load_morse_graph_data()`
+- **Visualization Compatible**: Data format matches what your plot functions expect
+
+**Implementation Priority:** High - This preserves your workflow and ensures pipeline compatibility
+
+---
+
+### 3. Pipeline-Compatible Data Extraction Utilities
+
+**Problem:** CMGDB's data structures are rigid, but your pipeline expects specific dict formats with keys like `'morse_graph'`, `'morse_sets'`, `'morse_set_barycenters'`, `'config'`, `'method'`. Your caching system (`save_morse_graph_data()` / `load_morse_graph_data()`) expects these formats.
+
+**Suggestion:** Provide extraction utilities that convert CMGDB data to your pipeline's expected formats, ensuring compatibility with caching and visualization.
+
+```python
+# In core.py or utils.py
+def extract_cmgdb_to_pipeline_format(
+    morse_graph_cmgdb: 'CMGDB.MorseGraph',
+    map_graph_cmgdb: 'CMGDB.MapGraph' = None,
+    config: 'ExperimentConfig' = None,
+    method: str = None,
+    computation_time: float = None
+) -> Dict[str, Any]:
+    """
+    Extract CMGDB data in pipeline's expected format.
+    
+    Returns dict compatible with:
+    - save_morse_graph_data() / load_morse_graph_data()
+    - Pipeline's morse_graph_3d_data / morse_graph_2d_data
+    - Visualization functions (plot_morse_sets_3d_scatter, etc.)
+    
+    Format matches what pipeline expects:
+    {
+        'morse_graph': CMGDB.MorseGraph,  # Raw object for advanced use
+        'morse_sets': Dict[int, List],  # vertex -> list of boxes
+        'morse_set_barycenters': Dict[int, List],  # vertex -> list of barycenters
+        'config': dict,  # Config dict for reproducibility
+        'method': str,  # Optional: 'data', 'restricted', 'full', 'enclosure'
+        'computation_time': float,  # Optional: timing info
+    }
+    """
+    morse_sets = {}
+    barycenters = {}
+    
+    # Extract Morse sets (boxes)
+    for v in range(morse_graph_cmgdb.num_vertices()):
+        boxes = morse_graph_cmgdb.morse_set_boxes(v)
+        morse_sets[v] = boxes  # List of boxes (CMGDB format: flat lists)
+        
+        # Compute barycenters (pipeline expects this)
+        barycenters[v] = []
+        if boxes:
+            dim = len(boxes[0]) // 2
+            for box in boxes:
+                barycenter = np.array([(box[j] + box[j + dim]) / 2.0 for j in range(dim)])
+                barycenters[v].append(barycenter)
+    
+    result = {
+        'morse_graph': morse_graph_cmgdb,
+        'morse_sets': morse_sets,
+        'morse_set_barycenters': barycenters,
+    }
+    
+    # Add optional fields
+    if config is not None:
+        result['config'] = config.to_dict()
+    if method is not None:
+        result['method'] = method
+    if computation_time is not None:
+        result['computation_time'] = computation_time
+    
+    return result
+
+# Helper for backward compatibility with NetworkX code
+def extract_cmgdb_to_networkx(morse_graph_cmgdb, map_graph_cmgdb) -> nx.DiGraph:
+    """
+    Convert CMGDB MorseGraph to NetworkX format for existing code.
+    
+    Useful for functions that still expect NetworkX graphs.
+    """
+    # Implementation converts CMGDB format to NetworkX
+    # ... (see suggestion #6 for details)
+    pass
+```
+
+**Benefits:**
+- **Pipeline Compatible**: Returns format that works with your caching system
+- **Visualization Compatible**: Data format matches what your plot functions expect
+- **Caching Compatible**: Can be saved/loaded with `save_morse_graph_data()` / `load_morse_graph_data()`
+- **Backward Compatible**: Can also convert to NetworkX for existing code
+
+**Implementation Priority:** High - This ensures pipeline compatibility
+
+---
+
+### 4. Preserve Your Visualization Tools and Ensure Data Compatibility
+
+**Current State:** You have extensive visualization tools (`plot.py`) that expect specific data formats. Your pipeline calls functions like `plot_morse_sets_3d_scatter()`, `plot_morse_graph_diagram()`, `plot_2x2_morse_comparison()`, etc., which expect CMGDB.MorseGraph objects and specific dict structures.
+
+**Suggestion:** **Ensure CMGDB integration provides data in formats your visualization functions expect.**
+
+```python
+# Your plot functions stay the same - they expect:
+# - morse_graph: CMGDB.MorseGraph object
+# - morse_set_barycenters: Dict[int, List[np.ndarray]]
+# - domain_bounds: np.ndarray
+
+# Pipeline's visualization calls (from run_stage_1_3d):
+plot_morse_graph_diagram(
+    morse_graph_data['morse_graph'],  # CMGDB.MorseGraph object
+    output_path,
+    title
+)
+
+plot_morse_sets_3d_scatter(
+    morse_graph_data['morse_graph'],  # CMGDB.MorseGraph object
+    domain_bounds,
+    output_path,
+    title=...,
+    labels=...
+)
+
+plot_morse_sets_3d_projections(
+    morse_graph_data['morse_graph'],  # CMGDB.MorseGraph object
+    morse_graph_data['morse_set_barycenters'],  # Dict[int, List]
+    output_dir,
+    system_name,
+    domain_bounds,
+    prefix="03"
+)
+
+# CMGDB integration must provide data in this format
+# The extract_cmgdb_to_pipeline_format() function ensures this
+```
+
+**Key Compatibility Points:**
+1. **CMGDB.MorseGraph objects**: Your plots use `morse_graph.num_vertices()`, `morse_graph.morse_set_boxes()`, etc.
+2. **Barycenters format**: `Dict[int, List[np.ndarray]]` where each list contains barycenters for that Morse set
+3. **Domain bounds**: `np.ndarray` shape `(2, D)` with `[[min_vals], [max_vals]]`
+4. **Comparison plots**: Expect both 3D and 2D Morse graphs in CMGDB format
+
+**Benefits:**
+- **Your Visualizations Work**: No need to rewrite plot functions
+- **Pipeline Compatible**: Data format matches what pipeline passes to plots
+- **CMGDB Integration**: Can use CMGDB's native objects directly
+- **Flexible**: Add new visualizations using CMGDB objects
+
+**Implementation Priority:** High - Ensures visualization workflow works unchanged
+
+---
+
+### 5. Support All Pipeline Computation Methods
+
+**Current State:** Your pipeline supports multiple methods for 2D latent Morse graph computation: `'data'`, `'restricted'`, `'full'`, `'enclosure'`. Each method has different requirements and produces different results.
+
+**Suggestion:** **Ensure CMGDB integration supports all methods your pipeline uses, with proper data format conversion.**
+
+```python
+# Pipeline's run_stage_5_latent_morse() supports these methods:
+def compute_morse_graph_2d_for_pipeline(
+    method: str,  # 'data', 'restricted', 'full', 'enclosure'
+    config: ExperimentConfig,
+    latent_bounds: np.ndarray,
+    encoder, decoder, latent_dynamics,  # For learned methods
+    Z_grid_encoded=None, G_Z_grid_encoded=None,  # For data method
+    device=None
+) -> Dict[str, Any]:
+    """
+    Compute 2D Morse graph using specified method, returning pipeline format.
+    
+    Methods:
+    - 'data': Uses BoxMapData with encoded grid points
+    - 'restricted': Uses BoxMapLearnedLatent with restricted domain
+    - 'full': Uses BoxMapLearnedLatent on full domain
+    - 'enclosure': Uses BoxMapLearnedLatent with corner evaluation + padding
+    
+    Returns pipeline-compatible dict with 'method' key.
+    """
+    if method == 'data':
+        # Uses BoxMapData - needs encoded grid points
+        box_map_2d = BoxMapData(
+            Z_grid_encoded, G_Z_grid_encoded,
+            grid=data_grid,
+            map_empty='outside',
+            output_enclosure='box_enclosure'
+        )
+        morse_graph, morse_sets, barycenters = compute_morse_graph_2d_data(
+            box_map_2d, latent_bounds,
+            config.latent_subdiv_min,
+            config.latent_subdiv_max,
+            config.latent_subdiv_init,
+            config.latent_subdiv_limit
+        )
+    
+    elif method in ['full', 'restricted']:
+        # Uses BoxMapLearnedLatent
+        dynamics = BoxMapLearnedLatent(
+            latent_dynamics, device,
+            padding=config.latent_padding if config.latent_padding else 0.0,
+            allowed_indices=None if method == 'full' else allowed_indices
+        )
+        result = _compute_method_learned(...)
+        morse_graph = result['morse_graph']
+        morse_sets = {i: morse_graph.morse_set_boxes(i) 
+                     for i in range(morse_graph.num_vertices())}
+        barycenters = result['barycenters']
+    
+    elif method == 'enclosure':
+        # Similar to 'full' but with specific evaluation method
+        # (corner evaluation + padding)
+        result = _compute_method_learned(...)
+        morse_graph = result['morse_graph']
+        morse_sets = {i: morse_graph.morse_set_boxes(i) 
+                     for i in range(morse_graph.num_vertices())}
+        barycenters = result['barycenters']
+    
+    # Return in pipeline format
+    return {
+        'morse_graph': morse_graph,
+        'morse_sets': morse_sets,
+        'morse_set_barycenters': barycenters,
+        'config': config.to_dict(),
+        'method': method  # Important for pipeline's generate_comparisons()
+    }
+```
+
+**Benefits:**
+- **All Methods Supported**: Pipeline can use any method seamlessly
+- **Consistent Format**: All methods return same pipeline-compatible format
+- **Method Tracking**: 'method' key allows pipeline to handle method-specific logic
+- **Caching Compatible**: All methods can be cached using same system
+
+**Implementation Priority:** High - Required for pipeline's method comparison features
+
+---
+
+### 6. Enhanced MORALS Workflow Integration
+
+**Current State:** MORALS workflows exist but are somewhat separate from core MorseGraph functionality.
+
+**Suggestion:** Deeply integrate MORALS approach as a first-class feature of MorseGraph.
+
+```python
+# In core.py or new morals.py module
+class MORALSWorkflow:
+    """
+    MORALS (Morse Graph-aided discovery of Regions of Attraction in Learned Latent Space)
+    workflow integrated into MorseGraph.
+    
+    This extends CMGDB with:
+    - Autoencoder training for dimensionality reduction
+    - Latent space Morse graph computation
+    - Comparison between full-space and latent-space dynamics
+    """
+    
+    def __init__(self, config):
+        self.config = config
+        self.encoder = None
+        self.decoder = None
+        self.latent_dynamics = None
+    
+    def train_autoencoder(self, X, Y):
+        """
+        Train autoencoder and latent dynamics models.
+        
+        Uses MORALS-style training with:
+        - Reconstruction loss
+        - Dynamics reconstruction loss
+        - Dynamics consistency loss
+        """
+        # Train encoder, decoder, latent_dynamics
+        # Using MorseGraph's training utilities
+        pass
+    
+    def compute_latent_morse_graph(self, latent_bounds, method='data'):
+        """
+        Compute Morse graph in latent space using CMGDB.
+        
+        Methods:
+        - 'data': Use BoxMapData with encoded trajectories
+        - 'learned': Use BoxMapLearnedLatent with neural network
+        - 'restricted': Restricted domain evaluation
+        """
+        # Use CMGDB via MorseGraph wrapper
+        # Integrates with learned models
+        pass
+    
+    def compare_3d_vs_latent(self):
+        """
+        Compare 3D ground truth with 2D latent approximation.
+        
+        MORALS-specific analysis:
+        - Preimage classification
+        - Barycenter projection
+        - Agreement metrics
+        """
+        pass
+```
+
+**Benefits:**
+- **Integrated Workflow**: MORALS becomes core MorseGraph feature
+- **CMGDB Integration**: Uses CMGDB for both 3D and latent computations
+- **Extended Analysis**: Adds comparison tools, preimage analysis, etc.
+- **Research-Ready**: Complete pipeline for learned dynamics analysis
+
+**Implementation Priority:** High - This is a key differentiator for MorseGraph
+
+---
+
+### 7. Caching System Integration
+
+**Current State:** Your pipeline has sophisticated hash-based caching (`compute_cmgdb_3d_hash()`, `compute_cmgdb_2d_hash()`, etc.) that saves/loads data using `save_morse_graph_data()` / `load_morse_graph_data()`. The caching system expects specific data formats.
+
+**Suggestion:** **Ensure CMGDB integration works seamlessly with your caching system.**
+
+```python
+# Your caching functions expect this format:
+def save_morse_graph_data(directory: str, data: Dict[str, Any]) -> None:
+    """
+    Save Morse graph data in pipeline's format.
+    
+    Expects data dict with keys:
+    - 'morse_graph': CMGDB.MorseGraph (will be pickled)
+    - 'morse_sets': Dict[int, List] (will be saved)
+    - 'morse_set_barycenters': Dict[int, List] (will be saved as .npz)
+    - 'config': dict (will be saved as JSON)
+    - 'method': str (optional, for 2D computations)
+    """
+    # Save CMGDB object using CMGDB's SaveMorseGraphData
+    # Save barycenters as .npz
+    # Save config as JSON
+    # Save metadata
+    pass
+
+# CMGDB integration should produce data compatible with this
+def compute_and_cache_morse_graph_3d(
+    dynamics,
+    domain_bounds,
+    config: ExperimentConfig,
+    cache_dir: str,
+    force_recompute: bool = False
+) -> Tuple[Dict[str, Any], bool]:
+    """
+    Compute 3D Morse graph using CMGDB, with caching support.
+    
+    Returns:
+        (morse_graph_data, was_cached) tuple
+        morse_graph_data is compatible with save_morse_graph_data()
+    """
+    # Check cache
+    if not force_recompute:
+        cached = load_morse_graph_data(cache_dir)
+        if cached is not None:
+            return cached, True
+    
+    # Compute using CMGDB
+    morse_graph, morse_sets, barycenters = compute_morse_graph_3d(
+        dynamics, domain_bounds,
+        subdiv_min=config.subdiv_min,
+        subdiv_max=config.subdiv_max,
+        subdiv_init=config.subdiv_init,
+        subdiv_limit=config.subdiv_limit
+    )
+    
+    # Format for pipeline
+    morse_graph_data = extract_cmgdb_to_pipeline_format(
+        morse_graph,
+        config=config,
+        computation_time=...
+    )
+    
+    # Save to cache
+    save_morse_graph_data(cache_dir, morse_graph_data)
+    
+    return morse_graph_data, False
+```
+
+**Benefits:**
+- **Caching Works**: CMGDB computations can be cached using your existing system
+- **Pipeline Compatible**: Cache format matches what pipeline expects
+- **Efficient**: Avoid recomputation when parameters haven't changed
+- **Reproducible**: Config saved with results for reproducibility
+
+**Implementation Priority:** High - Required for pipeline's caching workflow
+
+**Note on Current Caching Implementation:**
+Your `save_morse_graph_data()` currently converts CMGDB.MorseGraph to NetworkX for saving. Consider:
+- **Option 1**: Keep conversion (current approach) - simpler, but loses CMGDB-specific features
+- **Option 2**: Use CMGDB's `SaveMorseGraphData()` - preserves CMGDB format, but need to adapt loading
+- **Option 3**: Save both formats - NetworkX for compatibility, CMGDB format for advanced use
+
+Recommendation: Option 3 for maximum flexibility while maintaining compatibility.
+
+---
+
+### 8. CMGDB ↔ NetworkX Conversion Utilities (For Backward Compatibility)
 
 **Current State:** CMGDB returns `CMGDB.MorseGraph` objects, but many functions expect NetworkX graphs.
 
@@ -212,15 +766,131 @@ def networkx_to_cmgdb_format(morse_graph_nx: nx.DiGraph) -> Dict:
 ```
 
 **Benefits:**
-- Seamless backward compatibility
+- Seamless backward compatibility with existing code
 - Can use CMGDB performance with NetworkX API
 - Gradual migration path
+- Works with `Model.compute_box_map()` returning NetworkX format
 
-**Implementation Priority:** High (required for #1)
+**Implementation Priority:** High (required for backward compatibility)
+
+**Note:** Your `save_morse_graph_data()` already converts CMGDB to NetworkX. The conversion utilities should ensure this works correctly and can be reversed if needed.
 
 ---
 
-### 3. Unified CMGDB Interface for All Dimensions
+### 9. Support Direct Usage Patterns (Examples)
+
+**Current State:** Your examples show both pipeline usage (`7_ives_model.py`) and direct usage (`6_map_learned_dynamics.py`, `1_map_dynamics.py`, etc.). Direct usage patterns use `Model.compute_box_map()` and `compute_morse_graph()`.
+
+**Suggestion:** **Ensure CMGDB integration supports both pipeline and direct usage patterns.**
+
+```python
+# Direct usage pattern (from examples/1_map_dynamics.py):
+model = Model(grid, dynamics)
+box_map = model.compute_box_map()  # Currently pure Python
+morse_graph = compute_morse_graph(box_map)  # NetworkX format
+basins = compute_all_morse_set_basins(morse_graph, box_map)
+
+# With CMGDB integration, this should still work:
+# Option 1: Model.compute_box_map() uses CMGDB internally, returns NetworkX
+model = Model(grid, dynamics)
+box_map = model.compute_box_map()  # Uses CMGDB, returns NetworkX (backward compatible)
+morse_graph = compute_morse_graph(box_map)  # Works as before
+
+# Option 2: Direct CMGDB usage for advanced users
+morse_graph_cmgdb, morse_sets, barycenters = compute_morse_graph_3d(
+    dynamics, domain_bounds, subdiv_min=20, subdiv_max=28
+)
+# Use CMGDB objects directly for advanced features
+
+# Option 3: Pipeline usage (unchanged)
+pipeline = MorseGraphPipeline(config_path='configs/ives_default.yaml')
+pipeline.run()  # Uses CMGDB internally, everything works
+```
+
+**Benefits:**
+- **Backward Compatible**: Existing example scripts continue to work
+- **Pipeline Compatible**: Pipeline workflow unchanged
+- **Flexible**: Advanced users can use CMGDB objects directly
+- **Gradual Migration**: Can migrate code incrementally
+
+**Implementation Priority:** High - Ensures all usage patterns work
+
+---
+
+### 10. Extended Analysis Tools Beyond CMGDB
+
+**Current State:** CMGDB provides core Morse graph computation. MorseGraph adds some analysis.
+
+**Suggestion:** Expand MorseGraph's analysis toolkit to provide comprehensive tools.
+
+```python
+# In analysis.py - Extended tools
+class MorseGraphAnalyzer:
+    """
+    Extended analysis tools that build on CMGDB's core computation.
+    
+    Provides:
+    - Basin analysis (beyond CMGDB's basic functionality)
+    - Stability analysis
+    - Parameter sensitivity
+    - Comparison tools
+    - Statistical analysis
+    """
+    
+    def analyze_basins(self, morse_graph_cmgdb, map_graph_cmgdb):
+        """
+        Comprehensive basin analysis using CMGDB data.
+        
+        Extends CMGDB with:
+        - Basin volume computation
+        - Basin boundary analysis
+        - Transient time analysis
+        - Basin stability metrics
+        """
+        pass
+    
+    def compare_morse_graphs(self, mg1, mg2):
+        """
+        Compare two Morse graphs (e.g., 3D vs latent).
+        
+        MORALS-specific:
+        - Agreement metrics
+        - Preimage analysis
+        - Correspondence mapping
+        """
+        pass
+    
+    def parameter_sensitivity(self, dynamics_func, param_ranges):
+        """
+        Analyze how Morse graph changes with parameters.
+        
+        Uses CMGDB for each parameter configuration.
+        """
+        pass
+    
+    def stability_analysis(self, morse_graph_cmgdb):
+        """
+        Analyze stability properties of Morse sets.
+        
+        Extends CMGDB with:
+        - Lyapunov-like analysis
+        - Stability indices
+        - Robustness metrics
+        """
+        pass
+```
+
+**Benefits:**
+- **Extended Functionality**: Tools beyond what CMGDB provides
+- **Research Tools**: Comprehensive analysis for research workflows
+- **MORALS Integration**: Specific tools for learned dynamics analysis
+- **Python Ecosystem**: Leverages NumPy, SciPy, NetworkX, etc.
+
+**Implementation Priority:** Medium - Adds value beyond core CMGDB functionality
+
+---
+
+### 11. Unified CMGDB Interface for All Dimensions
 
 **Current State:** ~~Separate functions for 2D and 3D CMGDB computations.~~ (Now unified via Model.compute_box_map())
 
@@ -309,7 +979,7 @@ def compute_box_map(self, n_jobs: int = -1, force_cmgdb: bool = False):
 
 ---
 
-### 5. Batch CMGDB Computations
+### 12. Batch CMGDB Computations
 
 **Current State:** Each CMGDB computation is independent.
 
@@ -1056,29 +1726,81 @@ def optimize_cmgdb_parameters(
 
 ## Summary of Priorities
 
-### CRITICAL Priority (Foundation)
+### CRITICAL Priority (Foundation - Pipeline Compatibility)
 
-1. **ALWAYS USE CMGDB** - Core refactoring to make CMGDB the primary backend
-   - Refactor `Model.compute_box_map()` to always use CMGDB
-   - Add CMGDB ↔ NetworkX conversion utilities
-   - Make CMGDB a required dependency (or fail gracefully with clear error)
-   - Update all functions to work with CMGDB objects
-   - **This enables all other optimizations**
+1. **CMGDB as Computation Backend - Pipeline-Compatible Wrapper**
+   - Use CMGDB for computation (fast C++ backend)
+   - Extract data in pipeline's expected format (dicts with 'morse_graph', 'morse_sets', 'morse_set_barycenters', 'config', 'method')
+   - **Compatible with caching system** (`save_morse_graph_data()` / `load_morse_graph_data()`)
+   - **Compatible with visualization** (plot functions expect CMGDB.MorseGraph objects)
+   - **Preserve pipeline structure** (MorseGraphPipeline works unchanged)
+   - **This ensures pipeline compatibility**
 
-### High Priority (Immediate Impact)
+2. **Pipeline-Compatible Data Extraction**
+   - Extract CMGDB data in format pipeline expects
+   - Return dicts compatible with `save_morse_graph_data()` / `load_morse_graph_data()`
+   - Ensure format matches what visualization functions expect
+   - Support all pipeline methods ('data', 'restricted', 'full', 'enclosure')
+   - **This ensures seamless pipeline integration**
 
-2. **CMGDB ↔ NetworkX Conversion Utilities** - Required for backward compatibility
-3. **Sparse BoxMap Representation** - Significant memory savings (if still needed after CMGDB refactor)
-4. **Incremental BoxMap Updates** - Faster adaptive refinement (using CMGDB's internal structures)
+3. **YAML Config System Integration**
+   - CMGDB integration reads from YOUR configs (cmgdb_3d, cmgdb_2d sections)
+   - No changes to config structure needed
+   - Works with `load_experiment_config()` as-is
+   - Parameters read from config (subdiv_min, subdiv_max, etc.)
+   - **This preserves your configuration workflow**
+
+4. **Visualization Compatibility**
+   - CMGDB integration provides CMGDB.MorseGraph objects (what plots expect)
+   - Barycenters in format `Dict[int, List[np.ndarray]]`
+   - Domain bounds in format `np.ndarray` shape `(2, D)`
+   - All plot functions work unchanged
+   - **This preserves your visualization workflow**
+
+5. **Caching System Integration**
+   - CMGDB computations compatible with hash-based caching
+   - Data format works with `save_morse_graph_data()` / `load_morse_graph_data()`
+   - Cache keys include all relevant parameters
+   - **This preserves your caching workflow**
+
+6. **Support All Pipeline Methods**
+   - Ensure 'data', 'restricted', 'full', 'enclosure' methods all work
+   - Each method returns pipeline-compatible format
+   - Method tracking via 'method' key in result dict
+   - **This enables pipeline's method comparison features**
+
+### High Priority (Key Differentiators)
+
+7. **Enhanced MORALS Workflow Integration**
+   - Integrate MORALS with YOUR pipeline structure
+   - Works with YOUR YAML configs
+   - Autoencoder + latent dynamics workflows
+   - Comparison tools (3D vs latent)
+   - Preimage classification (when BoxMapData available)
+   - **This extends your pipeline, doesn't replace it**
+
+8. **Support Direct Usage Patterns**
+   - Ensure `Model.compute_box_map()` works with CMGDB backend
+   - Backward compatible with existing example scripts
+   - Can return NetworkX format for existing code
+   - Advanced users can access CMGDB objects directly
+   - **This ensures all usage patterns work**
+
+9. **Extended Analysis Tools**
+   - Basin analysis beyond CMGDB basics
+   - Stability analysis
+   - Parameter sensitivity
+   - Comparison utilities (3D vs 2D, method comparison)
+   - **Extends CMGDB functionality while preserving your tools**
 
 ### Medium Priority (Significant Benefits)
 
-5. **Batch CMGDB Computations** - Parameter sweeps
-6. **Streaming BoxMap Construction** - Handle very large grids (if CMGDB doesn't handle it)
-7. **Lazy Box Evaluation** - Efficient adaptive refinement (using CMGDB's incremental capabilities)
-8. **Persistent BoxMap Storage** - Avoid recomputation (cache CMGDB results)
-9. **Early Termination for Basins** - Faster basin computation (using CMGDB's MapGraph)
-10. **CMGDB Parameter Auto-tuning** - Automatically find optimal subdivision parameters
+10. **CMGDB ↔ NetworkX Conversion Utilities** - For backward compatibility with existing code that uses NetworkX
+11. **Batch CMGDB Computations** - Parameter sweeps using YOUR config system
+12. **CMGDB Parameter Auto-tuning** - Auto-tune but save to YOUR config format
+13. **Incremental Updates** - Leverage CMGDB for refinement, extract data in pipeline format
+14. **Streaming for Very Large Grids** - Handle edge cases if needed (if CMGDB doesn't cover)
+15. **Preimage Classification Support** - Store BoxMapData objects in cache for preimage analysis
 
 ### Low Priority (Advanced Features)
 
@@ -1338,30 +2060,98 @@ morse_graph = compute_morse_graph(morse_graph_cmgdb)  # Converts automatically
 
 ## Conclusion
 
-**Key Architectural Decision: ALWAYS USE CMGDB**
+**Key Architectural Vision: MorseGraph Respects Your Pipeline**
 
-The primary refactoring is to make CMGDB the **only** computation backend. This:
-- Eliminates dual code paths and complexity
-- Provides consistent high performance across all dimensions
-- Simplifies maintenance (one codebase to optimize)
-- Enables access to CMGDB's advanced features (Conley index, etc.)
+MorseGraph's role is to:
+1. **Use CMGDB for Computation**: Fast C++ backend for heavy lifting
+2. **Extract Data Flexibly**: Don't force CMGDB's rigid structure
+3. **Preserve Your Tools**: YAML configs, pipeline, visualizations all work
+4. **Extend with MORALS**: Integrate learned dynamics with YOUR workflow
+5. **Add Analysis Tools**: Beyond CMGDB, compatible with YOUR tools
 
-**Migration Strategy:**
-1. **Phase 1**: Add CMGDB ↔ NetworkX conversion utilities
-2. **Phase 2**: Refactor `Model.compute_box_map()` to use CMGDB internally
-3. **Phase 3**: Update `compute_morse_graph()` to work with CMGDB objects directly
-4. **Phase 4**: Deprecate pure Python path (with clear migration guide)
-5. **Phase 5**: Remove pure Python implementation
+**Architecture - Respecting Your Pipeline:**
+```
+┌─────────────────────────────────────────┐
+│      YOUR Pipeline & Tools               │
+│  - YAML Configs (preserved)              │
+│  - MorseGraphPipeline (preserved)       │
+│  - plot.py visualizations (preserved)    │
+│  - Your data formats (preserved)          │
+└──────────────┬──────────────────────────┘
+               │ Uses
+┌──────────────▼──────────────────────────┐
+│         MorseGraph (Python)              │
+│  - Flexible CMGDB wrapper                 │
+│  - Data extraction utilities               │
+│  - MORALS workflows                       │
+│  - Extended analysis                      │
+└──────────────┬──────────────────────────┘
+               │ Uses for computation
+┌──────────────▼──────────────────────────┐
+│         CMGDB (C++ Backend)              │
+│  - Fast computation                       │
+│  - But data extracted flexibly            │
+└─────────────────────────────────────────┘
+```
 
-**Benefits:**
-- Users get CMGDB performance automatically
-- No code changes required (backward compatible via conversion)
-- Single, optimized code path
-- Foundation for all future optimizations
+**Migration Strategy - Pipeline-First Approach:**
+1. **Phase 1**: Update `compute_morse_graph_3d()` and `compute_morse_graph_2d_data()` to return pipeline-compatible formats
+2. **Phase 2**: Ensure data extraction utilities produce format compatible with `save_morse_graph_data()` / `load_morse_graph_data()`
+3. **Phase 3**: Verify pipeline's `run_stage_1_3d()` and `run_stage_5_latent_morse()` work with CMGDB data
+4. **Phase 4**: Ensure visualization functions receive correct data formats (CMGDB.MorseGraph objects, barycenters dicts)
+5. **Phase 5**: Update `Model.compute_box_map()` to use CMGDB internally (backward compatible NetworkX output)
+6. **Phase 6**: Add NetworkX conversion utilities for existing code that needs it
+7. **Phase 7**: Enhance MORALS workflows (uses YOUR pipeline structure)
+8. **Phase 8**: Add extended tools (compatible with YOUR formats)
 
-The remaining optimizations focus on:
-- Better integration with CMGDB's internal structures
-- Caching and persistence of CMGDB results
-- Parameter auto-tuning for CMGDB
-- Advanced features leveraging CMGDB capabilities
+**Value Proposition:**
+- **CMGDB Performance**: Fast computation when you need it
+- **Your Tools Work**: YAML configs, pipeline, visualizations unchanged
+- **Flexible Data**: Extract CMGDB data in formats YOU need
+- **Not Forced**: Don't have to use CMGDB's rigid structure
+- **MORALS Integration**: Complete workflows with YOUR config system
+
+**Key Principles:**
+- **Pipeline Compatibility First**: Ensure CMGDB integration works seamlessly with your pipeline
+- **Data Format Compatibility**: Extract CMGDB data in format your caching and visualization systems expect
+- **Config System Integration**: Read parameters from your YAML configs, don't force new structure
+- **Backward Compatibility**: Existing code (examples, direct usage) continues to work
+- **Your Tools First**: CMGDB serves your tools (pipeline, configs, visualizations), not the other way around
+- **Best of Both**: CMGDB's speed + your flexibility + pipeline compatibility
+
+**Specific Pipeline Compatibility Requirements:**
+
+1. **Data Structures**: 
+   - Return dicts with keys: `'morse_graph'` (CMGDB.MorseGraph), `'morse_sets'` (Dict[int, List]), `'morse_set_barycenters'` (Dict[int, List[np.ndarray]]), `'config'` (dict), `'method'` (str, optional)
+   - Format matches what `save_morse_graph_data()` / `load_morse_graph_data()` expect
+
+2. **Caching Compatibility**: 
+   - Data format works with hash-based caching (`compute_cmgdb_3d_hash()`, `compute_cmgdb_2d_hash()`)
+   - Can be saved/loaded using existing caching utilities
+   - Config included for reproducibility
+
+3. **Visualization Compatibility**: 
+   - Provide CMGDB.MorseGraph objects (plots use `morse_graph.num_vertices()`, `morse_graph.morse_set_boxes()`, etc.)
+   - Barycenters in format `Dict[int, List[np.ndarray]]` (what plots expect)
+   - Domain bounds as `np.ndarray` shape `(2, D)`
+
+4. **Config Integration**: 
+   - Read parameters from YAML configs: `config.subdiv_min`, `config.subdiv_max`, `config.subdiv_init`, `config.subdiv_limit`, `config.padding`
+   - Support both `cmgdb_3d` and `cmgdb_2d` sections
+   - No changes to config structure needed
+
+5. **Method Support**: 
+   - All methods ('data', 'restricted', 'full', 'enclosure') return consistent format
+   - Method tracked via 'method' key for pipeline's `generate_comparisons()`
+   - Each method works with pipeline's `run_stage_5_latent_morse()`
+
+6. **Pipeline Stages**: 
+   - `run_stage_1_3d()`: Works with CMGDB data format
+   - `run_stage_5_latent_morse()`: Supports all methods seamlessly
+   - `generate_comparisons()`: Can compare 3D vs 2D using CMGDB objects
+
+7. **Example Scripts**: 
+   - Direct usage (`Model.compute_box_map()`) works with CMGDB backend
+   - Pipeline usage (`MorseGraphPipeline.run()`) works unchanged
+   - Both patterns supported simultaneously
 

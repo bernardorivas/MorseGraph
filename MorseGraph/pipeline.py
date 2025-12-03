@@ -685,48 +685,8 @@ class MorseGraphPipeline:
 
         allowed_indices = None
         if restricted:
-            self._log("  Computing restricted domain (Data + L-inf neighbors)...")
-            
-            # Create a temporary UniformGrid to calculate indices
-            # Resolution is 2^subdiv_max
-            dims = [2**subdiv_max] * self.config.latent_dim
-            grid = UniformGrid(np.array(latent_bounds), dims)
-            
-            # 1. Map z_train to box indices
-            # z_train is in self.latent_data['Z_train_encoded']
-            z_train = self.latent_data['Z_train_encoded']
-            
-            # We need to reshape z_train to (N, 1, D) for batch processing if supported, 
-            # or just use standard box_to_indices if we loop or if it supports list of points.
-            # UniformGrid.box_to_indices takes a box (2, D).
-            # We want indices for POINTS. 
-            # Let's check grids.py for point_to_index or similar.
-            # Assuming we can compute it easily:
-            
-            # Compute grid indices for all points
-            # Grid bounds: latent_bounds
-            # Cell size: (max - min) / dims
-            cell_size = (latent_bounds[1] - latent_bounds[0]) / np.array(dims)
-            
-            # Vectorized computation of indices
-            # floor( (p - min) / cell_size )
-            indices_vec = np.floor((z_train - latent_bounds[0]) / cell_size).astype(int)
-            
-            # Clip to ensure valid range [0, dims-1]
-            indices_vec = np.clip(indices_vec, 0, np.array(dims) - 1)
-            
-            # Convert multidimensional indices to flat indices
-            # ravel_multi_index requires a tuple of arrays (one per dim)
-            flat_indices = np.ravel_multi_index(indices_vec.T, dims)
-            
-            active_set = set(flat_indices)
-            
-            # 2. Dilate indices (Radius 1 = King/Moore neighborhood)
-            active_array = np.array(list(active_set))
-            dilated_array = grid.dilate_indices(active_array, radius=1)
-            allowed_indices = set(dilated_array)
-            
-            self._log(f"  Restricted domain: {len(active_set)} data boxes -> {len(allowed_indices)} allowed boxes")
+            self._log("  Note: Restriction disabled - learned dynamics naturally constrained to data region")
+            self._log("  CMGDB will explore full domain; convergence focuses on relevant structure")
 
         # Setup Dynamics
         # Use a small epsilon for padding if specified, else 0
