@@ -307,7 +307,8 @@ def compute_morse_graph_3d_for_pipeline(
     dynamics,
     domain_bounds,
     config: Any,
-    **kwargs
+    verbose: bool = True,
+    computation_time: Optional[float] = None
 ) -> Dict[str, Any]:
     """
     Compute 3D Morse graph and return in pipeline's expected format.
@@ -319,7 +320,8 @@ def compute_morse_graph_3d_for_pipeline(
         dynamics: Dynamics object (e.g. BoxMapFunction)
         domain_bounds: [[lower_x, ...], [upper_x, ...]]
         config: ExperimentConfig object with subdiv_min, subdiv_max, etc.
-        **kwargs: Additional arguments passed to compute_morse_graph_3d()
+        verbose: Whether to print progress messages
+        computation_time: Optional computation time (will be measured if not provided)
 
     Returns:
         Dict compatible with save_morse_graph_data():
@@ -343,13 +345,13 @@ def compute_morse_graph_3d_for_pipeline(
         subdiv_max=config.subdiv_max,
         subdiv_init=config.subdiv_init,
         subdiv_limit=config.subdiv_limit,
-        **kwargs
+        verbose=verbose
     )
     
     return extract_cmgdb_to_pipeline_format(
         morse_graph,
         config=config,
-        **kwargs
+        computation_time=computation_time
     )
 
 
@@ -399,7 +401,8 @@ def compute_morse_graph_2d_for_pipeline(
     domain_bounds,
     config: Any,
     latent_bounds: Optional[np.ndarray] = None,
-    **kwargs
+    verbose: bool = True,
+    computation_time: Optional[float] = None
 ) -> Dict[str, Any]:
     """
     Compute 2D Morse graph using specified method and return in pipeline's expected format.
@@ -413,7 +416,8 @@ def compute_morse_graph_2d_for_pipeline(
         domain_bounds: [[lower_x, ...], [upper_x, ...]]
         config: ExperimentConfig object with latent_subdiv_min, latent_subdiv_max, etc.
         latent_bounds: Latent space bounds (optional, for some methods)
-        **kwargs: Additional arguments passed to computation functions
+        verbose: Whether to print progress messages
+        computation_time: Optional computation time (will be measured if not provided)
 
     Returns:
         Dict compatible with save_morse_graph_data():
@@ -436,14 +440,14 @@ def compute_morse_graph_2d_for_pipeline(
             subdiv_max=config.latent_subdiv_max,
             subdiv_init=config.latent_subdiv_init,
             subdiv_limit=config.latent_subdiv_limit,
-            **kwargs
+            verbose=verbose
         )
         
         return extract_cmgdb_to_pipeline_format(
             morse_graph,
             config=config,
             method=method,
-            **kwargs
+            computation_time=computation_time
         )
     else:
         raise ValueError(
