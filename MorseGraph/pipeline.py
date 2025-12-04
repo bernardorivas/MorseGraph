@@ -63,6 +63,7 @@ from MorseGraph.utils import (
     generate_3d_grid_for_encoding,
     generate_random_trajectories_3d,
     get_next_run_number,
+    PLOT_PREFIX_3D_SETS, # Added this import
 )
 
 
@@ -112,6 +113,27 @@ class MorseGraphPipeline:
         self.morse_graph_2d_data = None
         self.analysis_results = None
 
+    @property
+    def plot_output_dir(self):
+        """Ensures the plotting output directory exists and returns its path."""
+        path = os.path.join(self.run_dir, "figures")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def _get_or_compute_cached_data(self, cache_base_dir: str, hash_value: str, load_func, compute_func, save_func, force_recompute: bool, log_message_prefix: str):
+        cache_dir = os.path.join(cache_base_dir, hash_value)
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        data = load_func(cache_dir)
+
+        if data is None or force_recompute:
+            self._log(f"  {log_message_prefix} not found in cache or recompute forced. Computing...")
+            data = compute_func()
+            save_func(cache_dir, data)
+            self._log(f"  {log_message_prefix} computation complete and cached.")
+        else:
+            self._log(f"  {log_message_prefix} loaded from cache.")
+        return data
 
     def _log(self, message: str):
         timestamp = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
@@ -119,10 +141,29 @@ class MorseGraphPipeline:
             f.write(f"{timestamp} {message}\n")
         print(f"{timestamp} {message}")
 
+    def _plot_stage_1_results(self, morse_graph_data):
+        plot_output_dir = self.plot_output_dir
+        
+        plot_morse_graph_diagram(morse_graph_data['morse_graph'],
+                            os.path.join(plot_output_dir, "01_morse_graph_3d.png"),
+                            self.system_name)
+
+        plot_morse_sets_3d_scatter(morse_graph_data['morse_graph'],
+                                   self.config.domain_bounds,
+                                   os.path.join(plot_output_dir, "03_morse_sets_3d_scatter.png"),
+                                   title=f"{self.system_name} - 3D Morse Sets (Barycenters)",
+                                   labels={'x': 'X', 'y': 'Y', 'z': 'Z'})
+
+        plot_morse_sets_3d_projections(morse_graph_data['morse_graph'],
+                                       morse_graph_data['morse_set_barycenters'],
+                                       plot_output_dir,
+                                       self.system_name,
+                                       self.config.domain_bounds,
+                                       prefix=PLOT_PREFIX_3D_SETS)
+
     def run_stage_1_3d(self, force_recompute=False):
         self._log("STAGE 1: Computing 3D Morse Graph (Ground Truth)")
         
-        # Determine unique hash for 3D CMGDB computation based on relevant parameters
         system_parameters = get_system_parameters(self.config.system_type, self.config.dynamics_name)
         cmgdb_3d_hash = compute_cmgdb_3d_hash(
             self.config.dynamics_name,
@@ -134,29 +175,14 @@ class MorseGraphPipeline:
             self.config.padding,
             system_parameters
         )
-        cmgdb_3d_cache_dir = os.path.join(self.cmgdb_3d_dir, cmgdb_3d_hash)
-        os.makedirs(cmgdb_3d_cache_dir, exist_ok=True)
-        
-        # Attempt to load from cache
-        morse_graph_data = load_morse_graph_data(cmgdb_3d_cache_dir)
 
-        if morse_graph_data is None or force_recompute:
-            self._log("  3D Morse graph not found in cache or recompute forced. Computing...")
-            
-            # Get dynamics and bounds
+        def compute_3d_morse_graph_data():
             dynamics_func = get_system_dynamics(self.config.system_type, self.config.dynamics_name)
             domain_bounds_np = np.array(self.config.domain_bounds)
-
-            # Create BoxMapFunction for 3D dynamics
-            # Determine epsilon based on padding config
             epsilon = 1e-6 if self.config.padding else 0.0
             
-            box_map = BoxMapFunction(
-                map_f=dynamics_func,
-                epsilon=epsilon
-            )
+            box_map = BoxMapFunction(map_f=dynamics_func, epsilon=epsilon)
 
-            # Compute 3D Morse Graph
             morse_graph, morse_sets, morse_set_barycenters, _ = compute_morse_graph_3d(
                 box_map,
                 domain_bounds_np,
@@ -165,93 +191,32 @@ class MorseGraphPipeline:
                 self.config.subdiv_init,
                 self.config.subdiv_limit
             )
-            morse_graph_data = {
+            return {
                 'morse_graph': morse_graph,
                 'morse_sets': morse_sets,
                 'morse_set_barycenters': morse_set_barycenters,
-                'config': self.config.to_dict() # Store config for reproducibility
+                'config': self.config.to_dict()
             }
-            save_morse_graph_data(cmgdb_3d_cache_dir, morse_graph_data)
-            self._log("  3D Morse graph computation complete and cached.")
-        else:
-            self._log("  3D Morse graph loaded from cache.")
-        
-        self.morse_graph_3d_data = morse_graph_data
+
+        self.morse_graph_3d_data = self._get_or_compute_cached_data(
+            self.cmgdb_3d_dir,
+            cmgdb_3d_hash,
+            load_morse_graph_data,
+            compute_3d_morse_graph_data,
+            save_morse_graph_data,
+            force_recompute,
+            "3D Morse graph"
+        )
         
         # Visualization
-        plot_output_dir = os.path.join(self.run_dir, "figures")
-        os.makedirs(plot_output_dir, exist_ok=True)
-        
-        # Plot Morse graph
-        plot_morse_graph_diagram(morse_graph_data['morse_graph'],
-                            os.path.join(plot_output_dir, "01_morse_graph_3d.png"),
-                            self.system_name)
-
-        # Plot Morse sets (barycenter scatter visualization)
-        plot_morse_sets_3d_scatter(morse_graph_data['morse_graph'],
-                                   self.config.domain_bounds,
-                                   os.path.join(plot_output_dir, "03_morse_sets_3d_scatter.png"),
-                                   title=f"{self.system_name} - 3D Morse Sets (Barycenters)",
-                                   labels={'x': 'X', 'y': 'Y', 'z': 'Z'})
-
-        # Plot 2D projections of 3D Morse sets
-        plot_morse_sets_3d_projections(morse_graph_data['morse_graph'],
-                                       morse_graph_data['morse_set_barycenters'],
-                                       plot_output_dir, # Pass output_dir as argument
-                                       self.system_name,
-                                       self.config.domain_bounds,
-                                       prefix="03")
+        self._plot_stage_1_results(self.morse_graph_3d_data)
 
         self._log("STAGE 1: Completed.")
 
-    def run_stage_2_trajectories(self, force_recompute=False):
-        self._log("STAGE 2: Generating Trajectory Data")
-        
-        # Determine unique hash for trajectory data based on relevant parameters
-        traj_data_hash = compute_trajectory_data_hash(
-            self.morse_graph_3d_data['config'], # Use the config from 3D stage for consistency
-            self.config.n_trajectories,
-            self.config.n_points,
-            self.config.skip_initial,
-            self.config.random_seed
-        )
-        traj_data_cache_dir = os.path.join(self.trajectory_dir, traj_data_hash)
-        os.makedirs(traj_data_cache_dir, exist_ok=True)
+    def _plot_stage_2_results(self, trajectory_data):
+        plot_output_dir = self.plot_output_dir
+        Y_trajectories = trajectory_data['Y']
 
-        # Attempt to load from cache
-        trajectory_data = load_trajectory_data(traj_data_cache_dir)
-
-        if trajectory_data is None or force_recompute:
-            self._log("  Trajectory data not found in cache or recompute forced. Generating...")
-            
-            # Generate 3D trajectories
-            dynamics_func = get_system_dynamics(self.config.system_type, self.config.dynamics_name)
-            domain_bounds_np = np.array(self.config.domain_bounds)
-            
-            X, Y = generate_random_trajectories_3d(
-                dynamics_func,
-                domain_bounds_np,
-                self.config.n_trajectories,
-                self.config.n_points,
-                self.config.skip_initial,
-                self.config.random_seed
-            )
-            trajectory_data = {'X': X, 'Y': Y, 'config': self.config.to_dict()}
-            save_trajectory_data(traj_data_cache_dir, trajectory_data)
-            self._log("  Trajectory data generation complete and cached.")
-        else:
-            self._log("  Trajectory data loaded from cache.")
-        
-        self.trajectory_data = trajectory_data
-
-        # Visualization with trajectory overlays
-        plot_output_dir = os.path.join(self.run_dir, "figures")
-        os.makedirs(plot_output_dir, exist_ok=True)
-
-        # Prepare trajectory data for plotting (use tail of Y trajectories)
-        Y_trajectories = trajectory_data['Y']  # shape: (n_traj, n_points, 3)
-
-        # Plot Morse sets with trajectory overlay (scatter + tail)
         try:
             plot_morse_sets_3d_with_trajectories(
                 self.morse_graph_3d_data['morse_graph'],
@@ -268,7 +233,6 @@ class MorseGraphPipeline:
         except Exception as e:
             self._log(f"  Warning: Could not plot Morse sets with trajectories: {e}")
 
-        # Plot 2D projections with trajectory overlay
         try:
             plot_morse_sets_3d_projections_with_trajectories(
                 self.morse_graph_3d_data['morse_graph'],
@@ -277,7 +241,7 @@ class MorseGraphPipeline:
                 output_dir=plot_output_dir,
                 system_name=self.system_name,
                 domain_bounds=self.config.domain_bounds,
-                prefix="03",
+                prefix=PLOT_PREFIX_3D_SETS,
                 n_trajectories=100,
                 use_tail_only=True,
                 tail_fraction=0.5
@@ -286,14 +250,62 @@ class MorseGraphPipeline:
         except Exception as e:
             self._log(f"  Warning: Could not plot projections with trajectories: {e}")
 
+    def run_stage_2_trajectories(self, force_recompute=False):
+        self._log("STAGE 2: Generating Trajectory Data")
+        
+        traj_data_hash = compute_trajectory_data_hash(
+            self.morse_graph_3d_data['config'],
+            self.config.n_trajectories,
+            self.config.n_points,
+            self.config.skip_initial,
+            self.config.random_seed
+        )
+
+        def generate_trajectory_data_func():
+            dynamics_func = get_system_dynamics(self.config.system_type, self.config.dynamics_name)
+            domain_bounds_np = np.array(self.config.domain_bounds)
+            
+            X, Y = generate_random_trajectories_3d(
+                dynamics_func,
+                domain_bounds_np,
+                self.config.n_trajectories,
+                self.config.n_points,
+                self.config.skip_initial,
+                self.config.random_seed
+            )
+            return {'X': X, 'Y': Y, 'config': self.config.to_dict()}
+
+        self.trajectory_data = self._get_or_compute_cached_data(
+            self.trajectory_dir,
+            traj_data_hash,
+            load_trajectory_data,
+            generate_trajectory_data_func,
+            save_trajectory_data,
+            force_recompute,
+            "Trajectory data"
+        )
+        
+        # Visualization with trajectory overlays
+        self._plot_stage_2_results(self.trajectory_data)
+
         self._log("STAGE 2: Completed.")
+
+    def _plot_stage_3_results(self, training_history):
+        plot_output_dir = self.plot_output_dir
+        
+        if training_history: # Only plot if training actually happened or loaded
+            # Adapt if history has train/val keys (new format) or flat (old format)
+            if 'train' in training_history and 'val' in training_history:
+                plot_training_curves(training_history['train'], training_history['val'], os.path.join(plot_output_dir, "04_training_curves.png"))
+            else:
+                # Backward compatibility or if load_training_history returns old format
+                plot_training_curves(training_history, training_history, os.path.join(plot_output_dir, "04_training_curves.png"))
 
     def run_stage_3_training(self, force_retrain=False):
         self._log("STAGE 3: Autoencoder Training")
 
-        # Determine unique hash for training based on relevant parameters
         training_hash = compute_training_hash(
-            self.trajectory_data['config'], # Use the config from traj stage for consistency
+            self.trajectory_data['config'],
             self.config.input_dim,
             self.config.latent_dim,
             self.config.hidden_dim,
@@ -310,28 +322,23 @@ class MorseGraphPipeline:
             self.config.decoder_activation,
             self.config.latent_dynamics_activation
         )
-        training_cache_dir = os.path.join(self.training_dir, training_hash)
-        os.makedirs(training_cache_dir, exist_ok=True)
 
-        # Attempt to load from cache
-        encoder, decoder, latent_dynamics = load_models(training_cache_dir)
-        training_history = load_training_history(training_cache_dir)
+        def load_models_wrapper(cache_dir):
+            encoder, decoder, latent_dynamics = load_models(cache_dir)
+            history = load_training_history(cache_dir)
+            if encoder and decoder and latent_dynamics and history:
+                return {'encoder': encoder, 'decoder': decoder, 'latent_dynamics': latent_dynamics, 'history': history}
+            return None
 
-        if encoder is None or force_retrain:
-            self._log("  Models not found in cache or retrain forced. Training new models...")
-            
-            # Prepare data (already float32 from generation)
+        def compute_models_func():
             X_full = self.trajectory_data['X']
             Y_full = self.trajectory_data['Y']
-
-            # Split into train and validation (80/20)
             split_idx = int(len(X_full) * 0.8)
             X_train = X_full[:split_idx]
             Y_train = Y_full[:split_idx]
             X_val = X_full[split_idx:]
             Y_val = Y_full[split_idx:]
 
-            # Train autoencoder
             training_result = train_autoencoder_dynamics(
                 X_train, Y_train,
                 X_val, Y_val,
@@ -342,59 +349,46 @@ class MorseGraphPipeline:
             encoder = training_result['encoder']
             decoder = training_result['decoder']
             latent_dynamics = training_result['latent_dynamics']
-            # history = training_result['train_losses']
-            # Ideally save both train/val history.
             history = {
                 'train': training_result['train_losses'],
                 'val': training_result['val_losses']
             }
-            
-            self.trained_models = {
-                'encoder': encoder,
-                'decoder': decoder,
-                'latent_dynamics': latent_dynamics,
-                'config': self.config.to_dict()
-            }
-            self.analysis_results = {'training_history': history} # Store history separately
-            
-            save_models(training_cache_dir, encoder, decoder, latent_dynamics, config=self.config.to_dict())
-            save_training_history(training_cache_dir, history)
-            self._log("  Autoencoder training complete and cached.")
-        else:
-            self._log("  Models loaded from cache.")
-            self.trained_models = {
-                'encoder': encoder,
-                'decoder': decoder,
-                'latent_dynamics': latent_dynamics,
-                'config': self.config.to_dict()
-            }
-            self.analysis_results = {'training_history': training_history}
+            return {'encoder': encoder, 'decoder': decoder, 'latent_dynamics': latent_dynamics, 'history': history}
+
+        def save_models_wrapper(cache_dir, data):
+            save_models(cache_dir, data['encoder'], data['decoder'], data['latent_dynamics'], config=self.config.to_dict())
+            save_training_history(cache_dir, data['history'])
+
+        cached_training_data = self._get_or_compute_cached_data(
+            self.training_dir,
+            training_hash,
+            load_models_wrapper,
+            compute_models_func,
+            save_models_wrapper,
+            force_retrain,
+            "Autoencoder models and training history"
+        )
+        
+        self.trained_models = {
+            'encoder': cached_training_data['encoder'],
+            'decoder': cached_training_data['decoder'],
+            'latent_dynamics': cached_training_data['latent_dynamics'],
+            'config': self.config.to_dict()
+        }
+        self.analysis_results = {'training_history': cached_training_data['history']}
 
         # Also save/copy models to run directory for easy access
         run_models_dir = os.path.join(self.run_dir, "models")
-        save_models(run_models_dir, encoder, decoder, latent_dynamics, config=self.config.to_dict())
+        save_models(run_models_dir, self.trained_models['encoder'], self.trained_models['decoder'], self.trained_models['latent_dynamics'], config=self.config.to_dict())
 
         # Visualization
-        plot_output_dir = os.path.join(self.run_dir, "figures")
-        os.makedirs(plot_output_dir, exist_ok=True)
-        
-        if training_history: # Only plot if training actually happened or loaded
-            # Adapt if history has train/val keys (new format) or flat (old format)
-            if 'train' in training_history and 'val' in training_history:
-                plot_training_curves(training_history['train'], training_history['val'], os.path.join(plot_output_dir, "04_training_curves.png"))
-            else:
-                # Backward compatibility or if load_training_history returns old format
-                plot_training_curves(training_history, training_history, os.path.join(plot_output_dir, "04_training_curves.png"))
+        self._plot_stage_3_results(cached_training_data['history'])
 
         self._log("STAGE 3: Completed.")
 
 
-    def run_stage_4_encoding(self):
-        self._log("STAGE 4: Latent Space Analysis (Encoding)")
-        
-        encoder = self.trained_models['encoder']
-        decoder = self.trained_models['decoder']
-        latent_dynamics = self.trained_models['latent_dynamics']
+    def _plot_stage_4_results(self, X_train_np, encoder, decoder, latent_dynamics, morse_graph_3d_data, latent_data):
+        plot_output_dir = self.plot_output_dir
         
         # Get device from model
         try:
@@ -402,47 +396,6 @@ class MorseGraphPipeline:
         except Exception:
             device = torch.device("cpu")
 
-        X_train_np = self.trajectory_data['X']
-        Y_train_np = self.trajectory_data['Y']
-
-        # Encode training data
-        X_train_tensor = torch.tensor(X_train_np, dtype=torch.float32).to(device)
-        Y_train_tensor = torch.tensor(Y_train_np, dtype=torch.float32).to(device)
-        
-        Z_train_encoded = encoder(X_train_tensor).detach().cpu().numpy()
-        G_Z_train_encoded = latent_dynamics(encoder(X_train_tensor)).detach().cpu().numpy()
-        
-        # Compute latent bounds
-        latent_bounds = compute_latent_bounds_from_data(Z_train_encoded, padding=self.config.latent_bounds_padding)
-
-        self.latent_data = {
-            'Z_train_encoded': Z_train_encoded,
-            'G_Z_train_encoded': G_Z_train_encoded,
-            'latent_bounds': latent_bounds
-        }
-
-        # Encode 3D Morse set barycenters for visualization
-        Z_barycenters_encoded = {}
-        # self.morse_graph_3d_data['morse_set_barycenters'] is Dict[int, List[np.ndarray]]
-        if self.morse_graph_3d_data and 'morse_set_barycenters' in self.morse_graph_3d_data:
-            for ms_idx, barys in self.morse_graph_3d_data['morse_set_barycenters'].items():
-                if barys:
-                    barys_np = np.array(barys, dtype=np.float32)
-                    # Check if barys is 1D (single point) or 2D (list of points)
-                    if barys_np.ndim == 1:
-                        barys_np = barys_np.reshape(1, -1)
-                        
-                    encoded = encoder(torch.tensor(barys_np).to(device)).detach().cpu().numpy()
-                    Z_barycenters_encoded[ms_idx] = encoded
-                else:
-                    Z_barycenters_encoded[ms_idx] = []
-            
-        self.latent_data['Z_barycenters_encoded'] = Z_barycenters_encoded
-
-        # Visualization for quality diagnostics
-        plot_output_dir = os.path.join(self.run_dir, "figures")
-        os.makedirs(plot_output_dir, exist_ok=True)
-        
         # Encoder/Decoder round-trip plot
         plot_encoder_decoder_roundtrip(X_train_np, encoder, decoder, os.path.join(plot_output_dir, "05_encoder_decoder_roundtrip.png"))
 
@@ -459,8 +412,8 @@ class MorseGraphPipeline:
         # Intelligently select initial conditions from Morse set barycenters
         # This gives more meaningful trajectories that explore the attractor structure
         ics = []
-        if self.morse_graph_3d_data and 'morse_set_barycenters' in self.morse_graph_3d_data:
-            barycenters_3d = self.morse_graph_3d_data['morse_set_barycenters']
+        if morse_graph_3d_data and 'morse_set_barycenters' in morse_graph_3d_data:
+            barycenters_3d = morse_graph_3d_data['morse_set_barycenters']
 
             # Collect all barycenters from all Morse sets
             all_barys = []
@@ -514,7 +467,80 @@ class MorseGraphPipeline:
             title_prefix=f"{self.system_name} - "
         )
 
+    def run_stage_4_encoding(self):
+        self._log("STAGE 4: Latent Space Analysis (Encoding)")
+        
+        encoder = self.trained_models['encoder']
+        decoder = self.trained_models['decoder']
+        latent_dynamics = self.trained_models['latent_dynamics']
+        
+        # Get device from model
+        try:
+            device = next(encoder.parameters()).device
+        except Exception:
+            device = torch.device("cpu")
+
+        X_train_np = self.trajectory_data['X']
+        Y_train_np = self.trajectory_data['Y']
+
+        # Encode training data
+        X_train_tensor = torch.tensor(X_train_np, dtype=torch.float32).to(device)
+        Y_train_tensor = torch.tensor(Y_train_np, dtype=torch.float32).to(device)
+        
+        Z_train_encoded = encoder(X_train_tensor).detach().cpu().numpy()
+        G_Z_train_encoded = latent_dynamics(encoder(X_train_tensor)).detach().cpu().numpy()
+        
+        # Compute latent bounds
+        latent_bounds = compute_latent_bounds_from_data(Z_train_encoded, padding=self.config.latent_bounds_padding)
+
+        self.latent_data = {
+            'Z_train_encoded': Z_train_encoded,
+            'G_Z_train_encoded': G_Z_train_encoded,
+            'latent_bounds': latent_bounds
+        }
+
+        # Encode 3D Morse set barycenters for visualization
+        Z_barycenters_encoded = {}
+        # self.morse_graph_3d_data['morse_set_barycenters'] is Dict[int, List[np.ndarray]]
+        if self.morse_graph_3d_data and 'morse_set_barycenters' in self.morse_graph_3d_data:
+            for ms_idx, barys in self.morse_graph_3d_data['morse_set_barycenters'].items():
+                if barys:
+                    barys_np = np.array(barys, dtype=np.float32)
+                    # Check if barys is 1D (single point) or 2D (list of points)
+                    if barys_np.ndim == 1:
+                        barys_np = barys_np.reshape(1, -1)
+                        
+                    encoded = encoder(torch.tensor(barys_np).to(device)).detach().cpu().numpy()
+                    Z_barycenters_encoded[ms_idx] = encoded
+                else:
+                    Z_barycenters_encoded[ms_idx] = []
+            
+        self.latent_data['Z_barycenters_encoded'] = Z_barycenters_encoded
+
+        # Visualization for quality diagnostics
+        self._plot_stage_4_results(
+            X_train_np,
+            encoder,
+            decoder,
+            latent_dynamics,
+            self.morse_graph_3d_data,
+            self.latent_data
+        )
+
         self._log("STAGE 4: Completed.")
+
+    def _plot_stage_5_results(self, morse_graph_2d_data, latent_data, method):
+        plot_output_dir = self.plot_output_dir
+        
+        if morse_graph_2d_data['morse_graph'] is not None:
+            plot_latent_space_2d(
+                latent_data['Z_train_encoded'],
+                latent_data['latent_bounds'],
+                morse_graph=morse_graph_2d_data['morse_graph'],
+                output_path=os.path.join(plot_output_dir, f"07_latent_morse_sets_{method}.png"),
+                title=self.system_name,
+                barycenters_latent=morse_graph_2d_data['morse_set_barycenters']
+            )
 
     def run_stage_5_latent_morse(self, method: str = None, force_recompute=False):
         self._log(f"STAGE 5: Computing 2D Morse Graph (Latent Dynamics) using method: {method}")
@@ -528,7 +554,7 @@ class MorseGraphPipeline:
         latent_bounds = self.latent_data['latent_bounds']
         
         cmgdb_2d_hash = compute_cmgdb_2d_hash(
-            self.trained_models['config'], # Use the config from training stage for consistency
+            self.trained_models['config'],
             method,
             self.config.latent_subdiv_min,
             self.config.latent_subdiv_max,
@@ -536,47 +562,38 @@ class MorseGraphPipeline:
             self.config.latent_subdiv_limit,
             self.config.latent_padding,
             self.config.original_grid_subdiv,
-            latent_bounds # Include latent_bounds in hash since it affects the grid
+            latent_bounds
         )
-        cmgdb_2d_cache_dir = os.path.join(self.cmgdb_2d_dir, cmgdb_2d_hash)
-        os.makedirs(cmgdb_2d_cache_dir, exist_ok=True)
-        
-        morse_graph_2d_data = load_morse_graph_data(cmgdb_2d_cache_dir)
 
-        if morse_graph_2d_data is None or force_recompute:
-            self._log(f"  2D Morse graph ({method}) not found in cache or recompute forced. Computing...")
-            
+        def compute_2d_morse_graph_data_func():
             latent_domain_bounds_np = np.array(latent_bounds)
-            
+            morse_graph_2d = None
+            morse_sets_2d = None
+            morse_set_barycenters_2d = None
+
             if method == 'data':
-                # Generate a fine 3D grid in original space
                 original_grid = generate_3d_grid_for_encoding(
                     np.array(self.config.domain_bounds),
                     self.config.original_grid_subdiv,
                     self.config.input_dim
                 )
                 
-                # Determine device
                 try:
                     device = next(encoder.parameters()).device
                 except Exception:
                     device = torch.device("cpu")
 
-                # Encode the grid points to latent space
                 original_grid_tensor = torch.tensor(original_grid, dtype=torch.float32).to(device)
                 Z_grid_encoded = encoder(original_grid_tensor).detach().cpu().numpy()
                 G_Z_grid_encoded = latent_dynamics(encoder(original_grid_tensor)).detach().cpu().numpy()
 
-                # Create BoxMapData
-                # Create grid for spatial indexing
-                # Resolution based on max subdivision (2^subdiv boxes total)
                 grid_res = int(2**(self.config.latent_subdiv_max / self.config.latent_dim))
                 dims = [grid_res] * self.config.latent_dim
                 data_grid = UniformGrid(latent_domain_bounds_np, dims)
 
                 box_map_2d = BoxMapData(
-                    Z_grid_encoded, # Latent points
-                    G_Z_grid_encoded, # Latent images
+                    Z_grid_encoded,
+                    G_Z_grid_encoded,
                     grid=data_grid,
                     map_empty='outside',
                     output_enclosure='box_enclosure'
@@ -590,9 +607,9 @@ class MorseGraphPipeline:
                     self.config.latent_subdiv_init,
                     self.config.latent_subdiv_limit
                 )
-            elif method in ['full', 'restricted']:
+            elif method in ['full', 'restricted', 'enclosure']: # 'enclosure' is handled as 'full' in _compute_method_learned
                  result = self._compute_method_learned(
-                    method,
+                    method if method != 'enclosure' else 'full', # Use 'full' for enclosure method in _compute_method_learned
                     latent_bounds,
                     self.config.latent_subdiv_min,
                     self.config.latent_subdiv_max,
@@ -601,71 +618,61 @@ class MorseGraphPipeline:
                     self.config.latent_padding
                 )
                  morse_graph_2d = result['morse_graph']
-                 morse_sets_2d = None # Not returned directly by CMGDB basic run, usually computed after
-                 # Actually _compute_method_learned returns 'morse_graph' and 'barycenters'
-                 # We need to extract morse_sets logic if needed, but plot functions usually use barycenters and graph.
-                 # Let's check return of _compute_method_learned
-                 morse_set_barycenters_2d = result['barycenters']
-                 
-                 # Extract morse sets indices (just range(num_vertices)) or actual boxes if needed?
-                 # The pipeline stores 'morse_sets' which are usually boxes.
-                 # CMGDB.ComputeMorseGraph returns graph.
-                 # We need to get boxes.
-                 morse_sets_2d = {}
-                 for i in range(result['num_morse_sets']):
-                     morse_sets_2d[i] = morse_graph_2d.morse_set_boxes(i)
-            elif method == 'enclosure': 
-                # This corresponds to F_latent / F_latent_image
-                 result = self._compute_method_learned(
-                    'full', # Enclosure is basically full domain with corner eval
-                    latent_bounds,
-                    self.config.latent_subdiv_min,
-                    self.config.latent_subdiv_max,
-                    self.config.latent_subdiv_init,
-                    self.config.latent_subdiv_limit,
-                    self.config.latent_padding
-                )
-                 # NOTE: _compute_method_learned uses BoxMapLearnedLatent which uses 
-                 # corner/sample evaluation + padding. This IS the enclosure method if 
-                 # padding is enabled and allowed_indices is None (full).
-                 morse_graph_2d = result['morse_graph']
                  morse_set_barycenters_2d = result['barycenters']
                  morse_sets_2d = {}
                  for i in range(result['num_morse_sets']):
                      morse_sets_2d[i] = morse_graph_2d.morse_set_boxes(i)
-
             else:
                 raise ValueError(f"Unknown 2D Morse graph computation method: {method}")
 
-            morse_graph_2d_data = {
+            return {
                 'morse_graph': morse_graph_2d,
                 'morse_sets': morse_sets_2d,
                 'morse_set_barycenters': morse_set_barycenters_2d,
                 'config': self.config.to_dict(),
                 'method': method
             }
-            save_morse_graph_data(cmgdb_2d_cache_dir, morse_graph_2d_data)
-            self._log(f"  2D Morse graph ({method}) computation complete and cached.")
-        else:
-            self._log(f"  2D Morse graph ({method}) loaded from cache.")
-        
-        self.morse_graph_2d_data = morse_graph_2d_data
+
+        self.morse_graph_2d_data = self._get_or_compute_cached_data(
+            self.cmgdb_2d_dir,
+            cmgdb_2d_hash,
+            load_morse_graph_data,
+            compute_2d_morse_graph_data_func,
+            save_morse_graph_data,
+            force_recompute,
+            f"2D Morse graph ({method})"
+        )
 
         # Visualization
-        plot_output_dir = os.path.join(self.run_dir, "figures")
-        os.makedirs(plot_output_dir, exist_ok=True)
-        
-        if morse_graph_2d_data['morse_graph'] is not None:
-            plot_latent_space_2d(
-                self.latent_data['Z_train_encoded'],
-                self.latent_data['latent_bounds'],
-                morse_graph=morse_graph_2d_data['morse_graph'],
-                output_path=os.path.join(plot_output_dir, f"07_latent_morse_sets_{method}.png"),
-                title=self.system_name,
-                barycenters_latent=morse_graph_2d_data['morse_set_barycenters']
-            )
+        self._plot_stage_5_results(self.morse_graph_2d_data, self.latent_data, method)
 
         self._log("STAGE 5: Completed.")
+
+    def _compute_restricted_allowed_indices(self, latent_bounds, subdiv_max):
+        """
+        Computes the allowed_indices for the 'restricted' method based on training data and dilation.
+        """
+        z_train = self.latent_data['Z_train_encoded']
+        latent_dim = z_train.shape[1]
+
+        # Create temporary grid at subdiv_max resolution
+        dims = [2**subdiv_max] * latent_dim
+        temp_grid = UniformGrid(np.array([latent_bounds[0], latent_bounds[1]]), dims)
+
+        # Map training data to box indices at this resolution
+        cell_size = (np.array(latent_bounds[1]) - np.array(latent_bounds[0])) / np.array(dims)
+        indices_vec = np.floor((z_train - np.array(latent_bounds[0])) / cell_size).astype(int)
+        indices_vec = np.clip(indices_vec, 0, np.array(dims) - 1)
+        flat_indices = np.ravel_multi_index(indices_vec.T, dims)
+        active_set = set(flat_indices)
+
+        # Dilate by radius=1 (Moore/King neighborhood)
+        active_array = np.array(list(active_set))
+        dilated_array = temp_grid.dilate_indices(active_array, radius=1)
+        allowed_indices = set(dilated_array)
+
+        self._log(f"  Restricted domain: {len(active_set)} data boxes -> {len(allowed_indices)} allowed boxes")
+        return allowed_indices
 
     def _compute_method_learned(self, method: str, latent_bounds, subdiv_min, subdiv_max, subdiv_init, subdiv_limit, padding):
         """
@@ -685,27 +692,7 @@ class MorseGraphPipeline:
 
         allowed_indices = None
         if restricted:
-            # Compute allowed_indices from training data at subdiv_max resolution
-            z_train = self.latent_data['Z_train_encoded']
-            latent_dim = z_train.shape[1]
-
-            # Create temporary grid at subdiv_max resolution
-            dims = [2**subdiv_max] * latent_dim
-            temp_grid = UniformGrid(np.array([latent_bounds[0], latent_bounds[1]]), dims)
-
-            # Map training data to box indices at this resolution
-            cell_size = (np.array(latent_bounds[1]) - np.array(latent_bounds[0])) / np.array(dims)
-            indices_vec = np.floor((z_train - np.array(latent_bounds[0])) / cell_size).astype(int)
-            indices_vec = np.clip(indices_vec, 0, np.array(dims) - 1)
-            flat_indices = np.ravel_multi_index(indices_vec.T, dims)
-            active_set = set(flat_indices)
-
-            # Dilate by radius=1 (Moore/King neighborhood)
-            active_array = np.array(list(active_set))
-            dilated_array = temp_grid.dilate_indices(active_array, radius=1)
-            allowed_indices = set(dilated_array)
-
-            self._log(f"  Restricted domain: {len(active_set)} data boxes -> {len(allowed_indices)} allowed boxes")
+            allowed_indices = self._compute_restricted_allowed_indices(latent_bounds, subdiv_max)
 
         # Setup Dynamics
         # Use a small epsilon for padding if specified, else 0
@@ -738,11 +725,8 @@ class MorseGraphPipeline:
             'from_cache': False
         }
 
-    def generate_comparisons(self):
-        self._log("Generating comparison visualizations.")
-        
-        plot_output_dir = os.path.join(self.run_dir, "figures")
-        os.makedirs(plot_output_dir, exist_ok=True)
+    def _plot_comparisons(self):
+        plot_output_dir = self.plot_output_dir
 
         if self.morse_graph_3d_data and self.morse_graph_2d_data and self.latent_data:
             # 2x2 comparison plot
@@ -770,6 +754,11 @@ class MorseGraphPipeline:
                 # Skipping for now to avoid complexity in this initial refactor
                 self._log("  Skipping preimage classification plot: BoxMapData object not readily available from cache.")
                 pass
+
+    def generate_comparisons(self):
+        self._log("Generating comparison visualizations.")
+        
+        self._plot_comparisons()
             
         self._log("Comparison visualizations generated.")
 

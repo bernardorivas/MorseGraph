@@ -77,6 +77,8 @@ from .caching import (
     load_or_compute_3d_morse_graph,
 )
 
+from .constants import PLOT_PREFIX_3D_SETS # Add this line
+
 __all__ = [
     'generate_trajectory_data',
     'generate_map_trajectory_data',
@@ -121,5 +123,5 @@ __all__ = [
     'save_morse_graph_data',
     'load_morse_graph_data',
     'load_or_compute_3d_morse_graph',
+    'PLOT_PREFIX_3D_SETS', # Add this line
 ]
-
