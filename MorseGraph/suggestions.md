@@ -8,9 +8,23 @@ This document outlines potential improvements to MorseGraph in terms of speed, m
 
 ### Summary
 
-The CMGDB integration has progressed significantly. Critical bugs identified in the initial review have been fixed.
+The CMGDB integration has progressed significantly. Critical bugs identified in the initial review have been fixed. Old/deprecated code structures have been removed.
+
+**Architecture**: MorseGraph now clearly separates:
+- **Educational Python implementations** (`_compute_*_python` methods) - for learning, testing, verification
+- **Production C++ wrapper** (CMGDB backend) - fast, optimized, required for production use
+- **CMGDB_utils** - External tools (do not modify)
 
 **Overall Quality Score: 8/10** - Core functionality working, ready for testing.
+
+### Code Cleanup (Completed 2025-12-03)
+
+| Cleanup Item | Status | Notes |
+|-------------|--------|-------|
+| Removed deprecated `compute_morse_graph_2d_restricted` imports | Done | Removed from pipeline.py, updated utils.py to use pipeline approach |
+| Removed Python fallback from `Model.compute_box_map()` | Done | CMGDB is now required, raises ImportError if not available |
+| Updated `utils.py` restricted method | Done | Now uses same approach as pipeline (`_compute_method_learned`) |
+| Fixed non-existent function references | Done | `compute_morse_graph_2d_latent_enclosure` now raises NotImplementedError |
 
 ### Critical Bugs (FIXED 2025-12-03)
 
@@ -26,7 +40,8 @@ The CMGDB integration has progressed significantly. Critical bugs identified in 
 | Feature | Status | File | Notes |
 |---------|--------|------|-------|
 | **CMGDB Integration** | | | |
-| Model.compute_box_map() CMGDB backend | Done | core.py | With Python fallback |
+| Model.compute_box_map() CMGDB backend | Done | core.py | CMGDB required for production, Python implementations for education/testing |
+| Python educational implementations | Done | core.py | `_compute_box_map_python()` for verification/testing, clearly separated |
 | extract_cmgdb_to_pipeline_format() | Done | core.py | Works correctly |
 | _run_cmgdb_compute() adapter | Done | core.py | Dynamics to CMGDB rect conversion |
 | compute_morse_graph_3d() | Done | core.py | Returns pipeline-compatible format |
@@ -96,36 +111,57 @@ The CMGDB integration has progressed significantly. Critical bugs identified in 
 
 ## Architectural Vision
 
-**MorseGraph's Role:**
-- **Python Wrapper**: Provides Pythonic interface to CMGDB's C++ backend
-- **MORALS Extension**: Integrates MORALS approach (learned latent dynamics, autoencoder workflows)
-- **Extended Tools**: Provides additional analysis, visualization, and computation utilities beyond CMGDB and MORALS
+**MorseGraph's Dual Nature:**
+MorseGraph provides **two complementary implementations** of Morse graph computation:
 
-**Key Principle**: MorseGraph wraps and extends CMGDB, making it easier to use while adding high-level functionality.
+1. **Educational Python Implementation** (Pure Python)
+   - Complete, readable Python implementations of Morse graph algorithms
+   - Designed for learning, understanding, and verification
+   - Methods prefixed with `_compute_*_python` (e.g., `_compute_box_map_python`)
+   - Used for unit testing, verification, and educational purposes
+   - Slower but transparent - you can read and understand every step
+   - No external dependencies required (except NumPy, NetworkX)
+
+2. **Production C++ Wrapper** (CMGDB Backend)
+   - Python wrapper around CMGDB's fast C++ backend
+   - Optimized for performance - orders of magnitude faster
+   - Used for all production computations
+   - Handles data format conversions (CMGDB ↔ NumPy ↔ NetworkX)
+   - Provides automatic parameter selection and optimization
+   - Makes CMGDB easier to use with Pythonic interfaces
+
+**Key Principle**: MorseGraph provides both educational clarity (Python) and production performance (C++), with clear separation between the two.
 
 ### What MorseGraph Is:
 
-1. **Python Wrapper Around CMGDB**
+1. **Dual Implementation System**
+   - **Educational**: Pure Python implementations for learning and verification
+   - **Production**: Python wrapper for CMGDB's C++ backend (way faster)
+   - Clear separation: Python implementations are for testing/education, CMGDB for production
+   - Both implement the same algorithms, ensuring correctness through cross-validation
+
+2. **Python Wrapper Around CMGDB**
    - Wraps CMGDB's C++ backend with Pythonic interfaces
    - Handles data format conversions (CMGDB ↔ NumPy ↔ NetworkX)
    - Provides automatic parameter selection and optimization
    - Makes CMGDB easier to use
+   - **CMGDB is required for production use** - no automatic fallback
 
-2. **MORALS Workflow Integration**
+3. **MORALS Workflow Integration**
    - Complete autoencoder + latent dynamics pipeline
    - Learned latent space analysis
    - Comparison between full-space and latent-space dynamics
    - Preimage analysis and barycenter projection
    - Research-ready workflows for learned dynamics
 
-3. **Extended Analysis Tools**
+4. **Extended Analysis Tools**
    - Basin analysis beyond CMGDB's basics
    - Stability and robustness analysis
    - Parameter sensitivity analysis
    - Comparison utilities for multiple systems
    - Statistical analysis and metrics
 
-4. **Python Ecosystem Integration**
+5. **Python Ecosystem Integration**
    - NumPy/SciPy for numerical operations
    - PyTorch for machine learning (MORALS)
    - NetworkX for graph analysis
@@ -134,24 +170,47 @@ The CMGDB integration has progressed significantly. Critical bugs identified in 
 
 ### What MorseGraph Is NOT:
 
-- **Not a replacement for CMGDB**: CMGDB remains the core computation engine
+- **Not a replacement for CMGDB**: CMGDB remains the core computation engine for production
 - **Not just MORALS**: Provides tools beyond MORALS workflows
-- **Not a pure Python reimplementation**: Uses CMGDB for all heavy computation
+- **Not pure Python only**: Uses CMGDB for all production heavy computation
 - **Not a separate tool**: Extends and wraps CMGDB, not competes with it
+- **Not a pure C++ wrapper**: Also provides educational Python implementations
 
 ### Value Proposition:
 
 **For Users:**
-- Get CMGDB's performance automatically
-- Use Pythonic interfaces instead of C++ API
-- Access MORALS workflows out of the box
-- Extended analysis tools for research
+- **Educational Value**: Learn Morse graph algorithms through readable Python code
+- **Production Performance**: Get CMGDB's C++ performance automatically when needed
+- **Flexibility**: Use Python implementations for small problems/testing, CMGDB for large-scale computation
+- **Pythonic Interfaces**: Use Pythonic interfaces instead of C++ API
+- **MORALS Workflows**: Access MORALS workflows out of the box
+- **Extended Tools**: Additional analysis tools for research
 
 **For Developers:**
-- Single codebase to maintain (wrapper + extensions)
-- Leverage CMGDB's optimized C++ code
-- Focus on high-level functionality
-- Python ecosystem integration
+- **Dual Implementation**: Educational Python code + production C++ wrapper
+- **Clear Separation**: Python implementations clearly marked for verification/testing
+- **Cross-Validation**: Can verify CMGDB results against Python implementations
+- **Maintainability**: Single codebase to maintain (wrapper + extensions + educational code)
+- **Performance**: Leverage CMGDB's optimized C++ code for production
+- **Education**: Python implementations serve as documentation and learning tools
+- **Python Ecosystem**: Full integration with Python ML/data science stack
+
+### Architecture Separation:
+
+**Production Code Path:**
+```
+User Code → Model.compute_box_map() → CMGDB (C++ backend) → Results
+```
+- Fast, optimized, required for production
+- CMGDB must be installed
+
+**Educational/Verification Code Path:**
+```
+Tests/Education → Model._compute_box_map_python() → Pure Python → Results
+```
+- Slow but readable and educational
+- No external dependencies (except NumPy/NetworkX)
+- Used explicitly for testing and learning
 
 ---
 

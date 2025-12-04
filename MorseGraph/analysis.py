@@ -75,7 +75,8 @@ def compute_morse_graph(box_map: Union[nx.DiGraph, Any], assign_colors: bool = T
         morse_sets = list(morse_graph.nodes())
         num_sets = len(morse_sets)
         if num_sets > 0:
-            cmap = cm.get_cmap(cmap_name)
+            import matplotlib.pyplot as plt
+            cmap = plt.colormaps.get_cmap(cmap_name)
             for i, morse_set in enumerate(morse_sets):
                 # Assign color as RGBA tuple
                 # Note: pygraphviz may warn about RGBA tuples, but this is harmless
@@ -513,3 +514,336 @@ def analyze_refinement_convergence(refinement_history: List[Dict]) -> Dict:
         analysis['morse_stability'].append(stability)
     
     return analysis
+
+
+# =============================================================================
+# Attractor/Repeller Identification
+# =============================================================================
+
+def identify_attractors(morse_graph: Union[nx.DiGraph, Any]) -> List[Any]:
+    """
+    Identify attractors in a Morse graph.
+    
+    An attractor is a node with no outgoing edges (sink node).
+    
+    Args:
+        morse_graph: Morse graph as NetworkX DiGraph or CMGDB.MorseGraph
+    
+    Returns:
+        List of attractor nodes
+    
+    Example:
+        >>> attractors = identify_attractors(morse_graph)
+        >>> print(f"Found {len(attractors)} attractors")
+    """
+    if hasattr(morse_graph, 'num_vertices'):
+        # CMGDB MorseGraph
+        attractors = []
+        for v in range(morse_graph.num_vertices()):
+            if len(morse_graph.adjacencies(v)) == 0:
+                attractors.append(v)
+        return attractors
+    else:
+        # NetworkX DiGraph
+        return [node for node in morse_graph.nodes() if morse_graph.out_degree(node) == 0]
+
+
+def identify_repellers(morse_graph: Union[nx.DiGraph, Any]) -> List[Any]:
+    """
+    Identify repellers in a Morse graph.
+    
+    A repeller is a node with no incoming edges (source node).
+    
+    Args:
+        morse_graph: Morse graph as NetworkX DiGraph or CMGDB.MorseGraph
+    
+    Returns:
+        List of repeller nodes
+    
+    Example:
+        >>> repellers = identify_repellers(morse_graph)
+        >>> print(f"Found {len(repellers)} repellers")
+    """
+    if hasattr(morse_graph, 'num_vertices'):
+        # CMGDB MorseGraph
+        # Get set of nodes that have incoming edges
+        nodes_with_incoming = set()
+        for v in range(morse_graph.num_vertices()):
+            for adj_v in morse_graph.adjacencies(v):
+                nodes_with_incoming.add(adj_v)
+        # Repellers are nodes without incoming edges
+        repellers = [v for v in range(morse_graph.num_vertices()) 
+                    if v not in nodes_with_incoming]
+        return repellers
+    else:
+        # NetworkX DiGraph
+        return [node for node in morse_graph.nodes() if morse_graph.in_degree(node) == 0]
+
+
+# =============================================================================
+# Attractor Lattice and Non-Trivial Filtering
+# Extracted from CMGDB_utils (MIT License 2025 Marcio Gameiro)
+# Adapted to use NetworkX instead of pychomp
+# =============================================================================
+
+def _transitive_closure_dag(graph: nx.DiGraph) -> nx.DiGraph:
+    """
+    Compute the transitive closure of a directed acyclic graph.
+    
+    Args:
+        graph: NetworkX DiGraph (assumed to be acyclic)
+    
+    Returns:
+        New DiGraph with transitive closure (all reachable paths added as edges)
+    """
+    closure = graph.copy()
+    
+    # For each node, add edges to all descendants
+    for node in graph.nodes():
+        descendants = set()
+        visited = set()
+        stack = [node]
+        
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            
+            for successor in graph.successors(current):
+                if successor not in visited:
+                    descendants.add(successor)
+                    stack.append(successor)
+                    # Add edge in closure if not already present
+                    if not closure.has_edge(node, successor):
+                        closure.add_edge(node, successor)
+    
+    return closure
+
+
+def _transitive_reduction_dag(graph: nx.DiGraph) -> nx.DiGraph:
+    """
+    Compute the transitive reduction of a directed acyclic graph.
+    
+    The transitive reduction removes redundant edges while preserving
+    reachability relationships.
+    
+    Args:
+        graph: NetworkX DiGraph (assumed to be acyclic)
+    
+    Returns:
+        New DiGraph with transitive reduction applied
+    """
+    reduction = graph.copy()
+    
+    # For each edge (u, v), check if there's a path u -> ... -> v
+    # If so, the edge (u, v) is redundant and can be removed
+    edges_to_remove = []
+    
+    for u, v in list(graph.edges()):
+        # Temporarily remove the edge
+        if reduction.has_edge(u, v):
+            reduction.remove_edge(u, v)
+            # Check if there's still a path from u to v
+            if nx.has_path(reduction, u, v):
+                # Edge is redundant, mark for removal
+                edges_to_remove.append((u, v))
+            else:
+                # Edge is necessary, restore it
+                reduction.add_edge(u, v)
+        else:
+            # Edge doesn't exist, skip
+            continue
+    
+    # Remove redundant edges (they should already be removed, but be safe)
+    for u, v in edges_to_remove:
+        if reduction.has_edge(u, v):
+            reduction.remove_edge(u, v)
+    
+    return reduction
+
+
+def compute_attractor_lattice(morse_graph: Union[nx.DiGraph, Any]) -> Dict[str, Any]:
+    """
+    Compute the lattice of attractors from a Morse graph.
+    
+    An attractor is a set of Morse sets that form a downset (closed under
+    taking descendants). The lattice structure captures the partial order
+    relationship between attractors.
+    
+    Adapted from CMGDB_utils.LatticeAttractors (MIT License 2025 Marcio Gameiro)
+    
+    Args:
+        morse_graph: Morse graph as NetworkX DiGraph or CMGDB.MorseGraph
+                    If NetworkX, nodes should be frozensets representing Morse sets
+    
+    Returns:
+        Dictionary with keys:
+        - 'attractors': Set of frozensets, each representing an attractor
+        - 'lattice': NetworkX DiGraph representing the attractor lattice
+        - 'elementary_attractors': Set of elementary attractors (downsets of single nodes)
+    
+    Example:
+        >>> morse_graph = compute_morse_graph(box_map)
+        >>> result = compute_attractor_lattice(morse_graph)
+        >>> print(f"Found {len(result['attractors'])} attractors")
+    """
+    import functools
+    import itertools
+    
+    # Convert CMGDB MorseGraph to NetworkX if needed
+    if hasattr(morse_graph, 'num_vertices'):
+        # Convert CMGDB to NetworkX
+        nx_graph = nx.DiGraph()
+        for v in range(morse_graph.num_vertices()):
+            nx_graph.add_node(v)
+        for v in range(morse_graph.num_vertices()):
+            for w in morse_graph.adjacencies(v):
+                nx_graph.add_edge(v, w)
+        morse_graph = nx_graph
+    
+    # Compute transitive closure
+    trans_closure = _transitive_closure_dag(morse_graph)
+    
+    # Find elementary attractors (downsets of each node)
+    elementary_attractors = {frozenset()}  # Empty set is always an attractor
+    
+    for v in morse_graph.nodes():
+        # Get all descendants of v (including v itself)
+        descendants = set(trans_closure.successors(v))
+        descendants.add(v)
+        elementary_attractors.add(frozenset(descendants))
+    
+    # Compute all attractors by taking unions of elementary attractors
+    # An attractor is the union of any set of elementary attractors
+    attractors = elementary_attractors.copy()
+    elementary_list = list(elementary_attractors)
+    
+    # Generate all combinations of elementary attractors
+    for k in range(1, len(elementary_list)):
+        for combo in itertools.combinations(elementary_list, k + 1):
+            union_attractor = frozenset().union(*combo)
+            attractors.add(union_attractor)
+    
+    # Build lattice graph (partial order on attractors)
+    def _cmp_attractors(A1: frozenset, A2: frozenset) -> int:
+        """Compare function for sorting attractors."""
+        if len(A1) == len(A2):
+            # Lexicographical order
+            sorted_A1 = sorted(A1)
+            sorted_A2 = sorted(A2)
+            if sorted_A1 == sorted_A2:
+                return 0
+            return -1 if sorted_A1 < sorted_A2 else 1
+        # Compare by length
+        return -1 if len(A1) < len(A2) else 1
+    
+    sorted_attractors = sorted(attractors, key=functools.cmp_to_key(_cmp_attractors))
+    
+    # Create lattice graph
+    lattice = nx.DiGraph()
+    for i, attractor in enumerate(sorted_attractors):
+        # Create label
+        if attractor:
+            label = '{' + ', '.join(map(str, sorted(attractor))) + '}'
+        else:
+            label = '{ }'
+        lattice.add_node(i, attractor=attractor, label=label)
+    
+    # Add edges for partial order (subset relationship)
+    # Edge direction: i -> j means A1 is a subset of A2 (A1 < A2)
+    for i, A1 in enumerate(sorted_attractors):
+        for j, A2 in enumerate(sorted_attractors):
+            if A1.issubset(A2) and A1 != A2:
+                lattice.add_edge(i, j)  # i -> j means A1 < A2
+    
+    # Apply transitive reduction
+    lattice = _transitive_reduction_dag(lattice)
+    
+    return {
+        'attractors': attractors,
+        'lattice': lattice,
+        'elementary_attractors': elementary_attractors
+    }
+
+
+def filter_trivial_morse_sets(morse_graph: Union[nx.DiGraph, Any], 
+                               return_reduced: bool = True) -> nx.DiGraph:
+    """
+    Filter out trivial Morse sets from a Morse graph.
+    
+    A trivial Morse set has Conley index (0, 0, ..., 0), meaning it represents
+    no interesting dynamics. This function creates a new graph containing only
+    non-trivial Morse sets with transitively reduced edges.
+    
+    Adapted from CMGDB_utils.NonTrivialCMGraph (MIT License 2025 Marcio Gameiro)
+    
+    Args:
+        morse_graph: Morse graph as NetworkX DiGraph or CMGDB.MorseGraph
+        return_reduced: If True, return transitively reduced graph (default: True)
+    
+    Returns:
+        NetworkX DiGraph containing only non-trivial Morse sets
+    
+    Example:
+        >>> morse_graph = compute_morse_graph(box_map)
+        >>> non_trivial = filter_trivial_morse_sets(morse_graph)
+        >>> print(f"Reduced from {morse_graph.number_of_nodes()} to {non_trivial.number_of_nodes()} nodes")
+    """
+    # Convert CMGDB MorseGraph to NetworkX if needed
+    if hasattr(morse_graph, 'num_vertices'):
+        # For CMGDB objects, check annotations
+        nx_graph = nx.DiGraph()
+        non_trivial_nodes = []
+        
+        for v in range(morse_graph.num_vertices()):
+            # Check if node is trivial (all annotations are '0')
+            try:
+                annotations = morse_graph.annotations(v)
+                is_trivial = all(ann == '0' for ann in annotations)
+            except (AttributeError, IndexError):
+                # Fallback: assume non-trivial if we can't check
+                is_trivial = False
+            
+            if not is_trivial:
+                non_trivial_nodes.append(v)
+                nx_graph.add_node(v)
+        
+        # Add edges between non-trivial nodes
+        for v in non_trivial_nodes:
+            for w in morse_graph.adjacencies(v):
+                if w in non_trivial_nodes and v != w:
+                    nx_graph.add_edge(v, w)
+        
+        result = nx_graph
+    else:
+        # For NetworkX graphs, we need to determine triviality differently
+        # Since NetworkX graphs don't have annotations, we'll use a heuristic:
+        # A node is trivial if it has no self-loop AND no outgoing edges AND no incoming edges
+        # (A node with incoming edges might be part of a Morse set even without outgoing edges)
+        # This is a simplified version - full implementation would need Conley index
+        non_trivial_nodes = []
+        for node in morse_graph.nodes():
+            # Check if node has self-loop, outgoing edges, or incoming edges
+            has_self_loop = morse_graph.has_edge(node, node)
+            has_outgoing = any(morse_graph.successors(node))
+            has_incoming = any(morse_graph.predecessors(node))
+            # Node is trivial only if it has no self-loop, no outgoing, AND no incoming
+            is_trivial = not (has_self_loop or has_outgoing or has_incoming)
+            
+            if not is_trivial:
+                non_trivial_nodes.append(node)
+        
+        # Create subgraph with only non-trivial nodes
+        # Need to preserve edges between non-trivial nodes
+        result = nx.DiGraph()
+        result.add_nodes_from(non_trivial_nodes)
+        for u, v in morse_graph.edges():
+            if u in non_trivial_nodes and v in non_trivial_nodes:
+                result.add_edge(u, v)
+    
+    # Apply transitive reduction if requested
+    if return_reduced and result.number_of_edges() > 0:
+        result = _transitive_reduction_dag(result)
+    
+    return result

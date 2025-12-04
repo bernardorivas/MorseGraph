@@ -30,7 +30,11 @@ from .analysis import (
     compute_basins_of_attraction,
     iterative_morse_computation,
     diameter_criterion,
-    analyze_refinement_convergence
+    analyze_refinement_convergence,
+    compute_attractor_lattice,
+    filter_trivial_morse_sets,
+    identify_attractors,
+    identify_repellers
 )
 from .plot import (
     plot_morse_sets,
@@ -77,6 +81,10 @@ __all__ = [
     'iterative_morse_computation',
     'diameter_criterion',
     'analyze_refinement_convergence',
+    'compute_attractor_lattice',
+    'filter_trivial_morse_sets',
+    'identify_attractors',
+    'identify_repellers',
     # Plotting
     'plot_morse_sets',
     'plot_basins_of_attraction',

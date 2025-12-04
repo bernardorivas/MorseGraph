@@ -15,7 +15,6 @@ from MorseGraph.grids import UniformGrid
 from MorseGraph.core import (
     compute_morse_graph_3d,
     compute_morse_graph_2d_data,
-    compute_morse_graph_2d_restricted,
     _run_cmgdb_compute,
     # compute_morse_graph_2d_latent_enclosure, # This will be implemented later
 )

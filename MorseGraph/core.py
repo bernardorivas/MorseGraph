@@ -7,6 +7,37 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 from .dynamics import Dynamics
 from .grids import AbstractGrid
 
+# =============================================================================
+# Architecture: CMGDB vs Python Implementations
+# =============================================================================
+#
+# This module follows a clear separation of concerns:
+#
+# 1. CMGDB (Production Backend):
+#    - CMGDB is the REQUIRED computation backend for all production code
+#    - Uses fast C++ implementation for Morse graph computation
+#    - Located in ./cmgdb/ directory
+#    - All user-facing code MUST use CMGDB
+#
+# 2. Python Implementations (Internal Verification/Testing):
+#    - Pure Python implementations exist for internal verification and testing
+#    - Methods prefixed with `_compute_*_python` are for:
+#      * Unit testing without CMGDB dependency
+#      * Verification of CMGDB results
+#      * Development/debugging
+#    - These are NOT used in production code paths
+#    - These are kept separate and clearly marked
+#
+# 3. CMGDB_utils (External Tools - DO NOT MODIFY):
+#    - Located in ./CMGDB_utils/ directory
+#    - Contains tools from another author that extend CMGDB functionality
+#    - DO NOT MODIFY - these are external dependencies maintained separately
+#    - May be used by MorseGraph but kept completely separate
+#    - Any integration should be done through clean interfaces, not by modifying
+#      the CMGDB_utils code itself
+#
+# =============================================================================
+
 # Check for CMGDB availability
 try:
     import CMGDB
@@ -53,13 +84,14 @@ class Model:
         :param cmgdb_kwargs: Additional arguments for CMGDB
         :return: BoxMap as nx.DiGraph or CMGDB.MorseGraph (if return_format='cmgdb')
         """
-        # If CMGDB is not available, fall back to Python implementation if possible
-        # But for now, we enforce CMGDB as per "Always-Use-CMGDB" plan
+        # CMGDB is required - no fallback to Python implementation
+        # This enforces the "Always-Use-CMGDB" architecture
         if not _CMGDB_AVAILABLE:
-            # Fallback to old python implementation if CMGDB missing
-            # This ensures we don't break if user hasn't installed CMGDB yet
-            print("Warning: CMGDB not available, falling back to pure Python implementation.")
-            return self._compute_box_map_python(n_jobs)
+            raise ImportError(
+                "CMGDB is required for MorseGraph. "
+                "Please install it via: pip install -e ./cmgdb\n"
+                "The pure Python fallback has been removed as part of the architecture refactoring."
+            )
         
         # Auto-select parameters
         dim = self.grid.dim
@@ -98,7 +130,26 @@ class Model:
 
     def _compute_box_map_python(self, n_jobs: int = -1) -> nx.DiGraph:
         """
-        Legacy pure Python implementation of BoxMap computation.
+        Pure Python implementation of BoxMap computation for internal verification.
+        
+        PURPOSE:
+        - Internal testing and verification (unit tests, integration tests)
+        - Development/debugging without CMGDB dependency
+        - Cross-validation of CMGDB results
+        
+        ARCHITECTURE:
+        - This is NOT used in production code paths
+        - Production code MUST use CMGDB via compute_box_map()
+        - This method is kept separate and clearly marked as verification-only
+        
+        USAGE:
+        - Called explicitly from tests: model._compute_box_map_python()
+        - Never called automatically - CMGDB is required for production
+        
+        NOTE:
+        - This implements the same algorithm as CMGDB but in pure Python
+        - Useful for understanding the computation without C++ complexity
+        - Performance is much slower than CMGDB - not for production use
         """
         boxes = self.grid.get_boxes()
         active_box_indices = self.dynamics.get_active_boxes(self.grid)
