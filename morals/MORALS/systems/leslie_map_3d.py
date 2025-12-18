@@ -6,8 +6,8 @@ class Leslie_map_3d(BaseSystem):
         super().__init__(**kwargs)
         self.name = "leslie_map_3d"
         self.state_bounds = np.array([
-            [-0.01, 90.0],
-            [-0.01, 70.0],
+            [-0.01, 120.0],
+            [-0.01, 75.0],
             [-0.01, 70.0]
         ])
         self.theta_1 = 28.9

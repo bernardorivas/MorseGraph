@@ -178,7 +178,7 @@ if __name__ == "__main__":
     parser.add_argument('--RoA',help='Compute RoA',action='store_true')
     parser.add_argument('--sub',help='Select subdivision',type=int,default=14)
     parser.add_argument('--validation_type',help='Select the type of Validation for the lantent discretization',type=str,default='random')
-    parser.add_argument('--Lips',help='increase Lipschitz constant by x%',type=int,default=0)
+    parser.add_argument('--Lips',help='increase Lipschitz constant by x%%',type=int,default=0)
 
     args = parser.parse_args()
     config_fname = args.config_dir + args.config

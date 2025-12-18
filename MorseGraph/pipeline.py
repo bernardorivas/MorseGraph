@@ -37,6 +37,7 @@ from MorseGraph.plot import (
     plot_latent_space_2d,
     plot_2x2_morse_comparison,
     plot_preimage_classification,
+    plot_attractor_barycenter_comparison,
 )
 from MorseGraph.config import (
     get_system_dynamics,
@@ -183,7 +184,7 @@ class MorseGraphPipeline:
             
             box_map = BoxMapFunction(map_f=dynamics_func, epsilon=epsilon)
 
-            morse_graph, morse_sets, morse_set_barycenters, _ = compute_morse_graph_3d(
+            morse_graph, morse_sets, morse_set_barycenters = compute_morse_graph_3d(
                 box_map,
                 domain_bounds_np,
                 self.config.subdiv_min,
@@ -467,6 +468,37 @@ class MorseGraphPipeline:
             title_prefix=f"{self.system_name} - "
         )
 
+        # Attractor + Barycenter comparison plot (3D physical + 2D latent)
+        if morse_graph_3d_data and 'morse_set_barycenters' in morse_graph_3d_data and self.trajectory_data:
+            try:
+                # Get training history if available
+                loss_history = None
+                if hasattr(self, 'analysis_results') and self.analysis_results:
+                    th = self.analysis_results.get('training_history', {})
+                    # Handle both old/new format
+                    if 'train' in th:
+                        loss_history = th['train']
+                    elif 'total' in th:
+                        loss_history = th
+
+                plot_attractor_barycenter_comparison(
+                    self.trajectory_data['Y'],
+                    morse_graph_3d_data['morse_set_barycenters'],
+                    encoder,
+                    device,
+                    self.config.domain_bounds,
+                    latent_data['latent_bounds'],
+                    output_path=os.path.join(plot_output_dir, "06b_attractor_barycenter_comparison.png"),
+                    title_prefix=f"{self.system_name} - ",
+                    n_trajectories=min(1000, self.config.n_trajectories),
+                    tail_fraction=0.5,
+                    loss_history=loss_history,
+                    labels={'x': 'X', 'y': 'Y', 'z': 'Z'},
+                )
+                self._log("  Generated attractor + barycenter comparison plot.")
+            except Exception as e:
+                self._log(f"  Warning: Could not generate attractor comparison plot: {e}")
+
     def run_stage_4_encoding(self):
         self._log("STAGE 4: Latent Space Analysis (Encoding)")
         
@@ -651,27 +683,34 @@ class MorseGraphPipeline:
     def _compute_restricted_allowed_indices(self, latent_bounds, subdiv_max):
         """
         Computes the allowed_indices for the 'restricted' method based on training data and dilation.
+
+        Note: Uses a coarser resolution for efficiency since CMGDB will handle adaptive refinement.
         """
         z_train = self.latent_data['Z_train_encoded']
         latent_dim = z_train.shape[1]
 
-        # Create temporary grid at subdiv_max resolution
-        dims = [2**subdiv_max] * latent_dim
+        # Use a coarser resolution for computing data-containing boxes
+        # CMGDB will adaptively refine from here, so we don't need full subdiv_max resolution
+        # Use subdiv_init + 12 to get a reasonable initial covering (e.g., 2^12 = 4096 boxes/dim)
+        coarse_subdiv = min(self.config.subdiv_init + 12, subdiv_max - 5)
+        coarse_subdiv = max(coarse_subdiv, 8)  # At least 2^8 = 256 boxes per dimension
+
+        dims = [2**coarse_subdiv] * latent_dim
         temp_grid = UniformGrid(np.array([latent_bounds[0], latent_bounds[1]]), dims)
 
-        # Map training data to box indices at this resolution
+        # Map training data to box indices at this coarser resolution
         cell_size = (np.array(latent_bounds[1]) - np.array(latent_bounds[0])) / np.array(dims)
         indices_vec = np.floor((z_train - np.array(latent_bounds[0])) / cell_size).astype(int)
         indices_vec = np.clip(indices_vec, 0, np.array(dims) - 1)
         flat_indices = np.ravel_multi_index(indices_vec.T, dims)
         active_set = set(flat_indices)
 
-        # Dilate by radius=1 (Moore/King neighborhood)
+        # Dilate by radius=2 (larger radius to compensate for coarser resolution)
         active_array = np.array(list(active_set))
-        dilated_array = temp_grid.dilate_indices(active_array, radius=1)
+        dilated_array = temp_grid.dilate_indices(active_array, radius=2)
         allowed_indices = set(dilated_array)
 
-        self._log(f"  Restricted domain: {len(active_set)} data boxes -> {len(allowed_indices)} allowed boxes")
+        self._log(f"  Restricted domain (subdiv {coarse_subdiv}): {len(active_set)} data boxes -> {len(allowed_indices)} allowed boxes")
         return allowed_indices
 
     def _compute_method_learned(self, method: str, latent_bounds, subdiv_min, subdiv_max, subdiv_init, subdiv_limit, padding):
@@ -733,7 +772,10 @@ class MorseGraphPipeline:
             # Prepare arguments for plot_2x2_morse_comparison
             encoder = self.trained_models['encoder']
             device = next(encoder.parameters()).device
-            
+
+            # Get 3D barycenters for overlay on latent space
+            barycenters_3d = self.morse_graph_3d_data.get('morse_set_barycenters', None)
+
             plot_2x2_morse_comparison(
                 self.morse_graph_3d_data['morse_graph'],
                 self.morse_graph_2d_data['morse_graph'],
@@ -743,7 +785,8 @@ class MorseGraphPipeline:
                 device,
                 self.latent_data['Z_train_encoded'],
                 output_path=os.path.join(plot_output_dir, "08_morse_2x2_comparison.png"),
-                title_prefix=f"{self.system_name}: "
+                title_prefix=f"{self.system_name}: ",
+                barycenters_3d=barycenters_3d
             )
 
             # Preimage classification plot (requires BoxMapData to be used for 2D)

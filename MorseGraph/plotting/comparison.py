@@ -316,29 +316,49 @@ def _plot_3d_barycenters_with_equilibria(
 
 def _plot_2d_latent_space_with_morse_sets(
     ax, morse_graph_2d, z_data, latent_bounds_2d, cmap_2d,
-    equilibria_latent=None, title_prefix=""
+    equilibria_latent=None, barycenters_latent=None, title_prefix=""
 ):
-    """Plot 2D latent space with Morse sets and equilibria."""
+    """Plot 2D latent space with Morse sets, equilibria, and encoded 3D barycenters."""
     num_morse_sets_2d = morse_graph_2d.num_vertices()
-    
-    ax.scatter(z_data[:, 0], z_data[:, 1], c='lightgray', s=1, 
+
+    ax.scatter(z_data[:, 0], z_data[:, 1], c='lightgray', s=1,
               alpha=0.3, rasterized=True, zorder=1)
-    
+
     node_colors_2d = normalize_colormap(cmap_2d, num_morse_sets_2d)
     _plot_morse_sets_rectangles(ax, morse_graph_2d, node_colors_2d)
-    
+
+    # Overlay encoded 3D barycenters (cool colormap to match 3D plot)
+    if barycenters_latent:
+        cmap_3d = cm.cool
+        max_idx = max(barycenters_latent.keys()) if barycenters_latent else 1
+        for morse_idx in sorted(barycenters_latent.keys()):
+            pts = barycenters_latent[morse_idx]
+            if pts is not None and len(pts) > 0:
+                pts_arr = np.array(pts)
+                if pts_arr.ndim == 1:
+                    pts_arr = pts_arr.reshape(1, -1)
+                color = cmap_3d(morse_idx / max(max_idx, 1))
+                ax.scatter(pts_arr[:, 0], pts_arr[:, 1],
+                          color=color, marker='o', s=150,
+                          edgecolors='black', linewidths=1.5,
+                          label=f'E(3D MS {morse_idx})', zorder=50)
+
     if equilibria_latent:
         for name, point_latent in equilibria_latent.items():
             ax.scatter(point_latent[0], point_latent[1],
-                      c='red', marker='*', s=300, label=name, 
+                      c='red', marker='*', s=300, label=name,
                       zorder=100, alpha=0.95)
-        ax.legend(fontsize=9, loc='upper right')
-    
+
+    # Legend handling
+    handles, labels_leg = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize=8, loc='upper right', framealpha=0.9)
+
     ax.set_xlim(latent_bounds_2d[0][0], latent_bounds_2d[1][0])
     ax.set_ylim(latent_bounds_2d[0][1], latent_bounds_2d[1][1])
     ax.set_xlabel('Latent Dim 0', fontsize=11)
     ax.set_ylabel('Latent Dim 1', fontsize=11)
-    ax.set_title(f'{title_prefix}Learned Latent Dynamics (2D)', 
+    ax.set_title(f'{title_prefix}Learned Latent Dynamics (2D)',
                 fontsize=14, fontweight='bold')
     ax.set_aspect('equal', adjustable='box')
 
@@ -351,17 +371,18 @@ def _count_morse_graph_edges(morse_graph) -> int:
 
 def plot_2x2_morse_comparison(
     morse_graph_3d,
-    morse_graph_2d, 
-    domain_bounds_3d, 
-    latent_bounds_2d, 
-    encoder, 
-    device, 
-    z_data, 
-    output_path=None, 
-    title_prefix="", 
-    equilibria=None, 
-    periodic_orbits=None, 
-    equilibria_latent=None, 
+    morse_graph_2d,
+    domain_bounds_3d,
+    latent_bounds_2d,
+    encoder,
+    device,
+    z_data,
+    output_path=None,
+    title_prefix="",
+    equilibria=None,
+    periodic_orbits=None,
+    equilibria_latent=None,
+    barycenters_3d=None,
     labels=None
 ):
     """
@@ -369,8 +390,8 @@ def plot_2x2_morse_comparison(
     - Top-left: 3D Morse graph diagram (using CMGDB.PlotMorseGraph)
     - Top-right: 2D Morse graph diagram (using CMGDB.PlotMorseGraph)
     - Bottom-left: 3D scatter (barycenters with equilibria/orbits)
-    - Bottom-right: 2D latent space scatter (using rectangle patches) 
-    
+    - Bottom-right: 2D latent space with Morse sets + E(3D barycenters) overlay
+
     Args:
         morse_graph_3d: CMGDB MorseGraph object for 3D
         morse_graph_2d: CMGDB MorseGraph object for 2D
@@ -384,12 +405,14 @@ def plot_2x2_morse_comparison(
         equilibria: Dict of equilibrium points in 3D space
         periodic_orbits: Dict of periodic orbits in 3D space
         equilibria_latent: Dict of equilibrium points in latent space
+        barycenters_3d: Dict mapping Morse set index to list of 3D barycenter coordinates
         labels: Dict with axis labels for 3D space
     """
     from mpl_toolkits.mplot3d import Axes3D
-    
+    import torch
+
     fig = plt.figure(figsize=(16, 14))
-    
+
     if labels is None:
         labels = {'x': 'X', 'y': 'Y', 'z': 'Z'}
 
@@ -397,6 +420,12 @@ def plot_2x2_morse_comparison(
     cmap_2d = cm.viridis
     num_morse_sets_3d = morse_graph_3d.num_vertices()
     num_morse_sets_2d = morse_graph_2d.num_vertices()
+
+    # Compute encoded barycenters if 3D barycenters provided
+    barycenters_latent = None
+    if barycenters_3d and encoder is not None:
+        from .utils import compute_encoded_barycenters
+        barycenters_latent = compute_encoded_barycenters(barycenters_3d, encoder, device)
 
     # Top-left: 3D Morse Graph Diagram
     ax1 = fig.add_subplot(2, 2, 1)
@@ -411,24 +440,24 @@ def plot_2x2_morse_comparison(
         ax2, morse_graph_2d, cmap_2d,
         f'{title_prefix}Learned Latent Dynamics (2D) ({num_morse_sets_2d} sets)'
     )
-    
+
     # Bottom-left: 3D Scatter with Barycenters
     ax3 = fig.add_subplot(2, 2, 3, projection='3d')
     _plot_3d_barycenters_with_equilibria(
         ax3, morse_graph_3d, domain_bounds_3d, cmap_3d,
         equilibria, periodic_orbits, labels, title_prefix
     )
-    
-    # Bottom-right: 2D Latent Space Scatter
+
+    # Bottom-right: 2D Latent Space with Morse sets + E(barycenters) overlay
     ax4 = fig.add_subplot(2, 2, 4)
     _plot_2d_latent_space_with_morse_sets(
         ax4, morse_graph_2d, z_data, latent_bounds_2d, cmap_2d,
-        equilibria_latent, title_prefix
+        equilibria_latent, barycenters_latent, title_prefix
     )
-    
+
     from .utils import finalize_plot
     finalize_plot(fig, ax=None, output_path=output_path, should_close=True)
-    
+
     return {
         'num_morse_sets_3d': num_morse_sets_3d,
         'num_morse_sets_2d': num_morse_sets_2d,

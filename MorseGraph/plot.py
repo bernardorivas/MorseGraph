@@ -59,6 +59,10 @@ from .plotting.latent import (
     plot_data_boxes,
 )
 
+from .plotting.attractor import (
+    plot_attractor_barycenter_comparison,
+)
+
 # Re-export for backward compatibility
 __all__ = [
     # Utils
@@ -95,4 +99,6 @@ __all__ = [
     'plot_latent_space_2d',
     'classify_points_to_morse_sets',
     'plot_data_boxes',
+    # Attractor
+    'plot_attractor_barycenter_comparison',
 ]

@@ -25,16 +25,31 @@ def sample_points(lower_bounds, upper_bounds, num_pts):
     return X
 
 def grid_points(lower_bounds, upper_bounds, num_pts):
-    # Returns a grid of initial conditions,
-    assert len(lower_bounds) == 2, "Currently, grid points only works for dimensionality 2!"
-    X = []
-    num = int(np.sqrt(num_pts))
-    dim1 = np.linspace(lower_bounds[0],upper_bounds[0],num)
-    dim2 = np.linspace(lower_bounds[1],upper_bounds[1],num)
-    for i in range(dim1.shape[0]):
-        for j in range(dim2.shape[0]):
-            X.append([dim1[i],dim2[j]])
-    return np.vstack(X)
+    # Returns a grid of initial conditions for arbitrary dimensions
+    dim = len(lower_bounds)
+
+    if dim == 2:
+        num = int(np.sqrt(num_pts))
+        dim1 = np.linspace(lower_bounds[0], upper_bounds[0], num)
+        dim2 = np.linspace(lower_bounds[1], upper_bounds[1], num)
+        X = []
+        for i in range(dim1.shape[0]):
+            for j in range(dim2.shape[0]):
+                X.append([dim1[i], dim2[j]])
+        return np.vstack(X)
+    elif dim == 3:
+        num = int(np.round(num_pts ** (1/3)))
+        dim1 = np.linspace(lower_bounds[0], upper_bounds[0], num)
+        dim2 = np.linspace(lower_bounds[1], upper_bounds[1], num)
+        dim3 = np.linspace(lower_bounds[2], upper_bounds[2], num)
+        X = []
+        for i in range(dim1.shape[0]):
+            for j in range(dim2.shape[0]):
+                for k in range(dim3.shape[0]):
+                    X.append([dim1[i], dim2[j], dim3[k]])
+        return np.vstack(X)
+    else:
+        raise NotImplementedError(f"Grid points for dimension {dim} not implemented")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -65,8 +80,8 @@ if __name__ == "__main__":
         upper_bounds = true_bounds[:,1]
         X = sample_points(lower_bounds, upper_bounds, num_trajs)
     else:
-        lower_bounds = true_bounds[0]
-        upper_bounds = true_bounds[1]
+        lower_bounds = true_bounds[:,0]
+        upper_bounds = true_bounds[:,1]
         X = grid_points(lower_bounds, upper_bounds, num_trajs)
 
     if args.system == "bistable" or args.system == "bistable_rot" or args.system == "leslie_map_3d":
